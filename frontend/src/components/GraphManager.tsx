@@ -68,14 +68,19 @@ export const useGraphManager = () => {
     return newNode
   }, [])
 
-  // Find node at position (within tolerance)
-  const findNodeAt = useCallback((x: number, y: number, tolerance: number = 15): GraphNode | null => {
-    return graphState.nodes.find(node => {
+  // Find node at position (within tolerance in units)
+  const findNodeAt = useCallback((x: number, y: number, tolerance: number = 5.0): GraphNode | null => {
+    const foundNode = graphState.nodes.find(node => {
       const distance = Math.sqrt(
         Math.pow(x - node.pos[0], 2) + Math.pow(y - node.pos[1], 2)
       )
+      // if (distance <= tolerance) {
+      //   console.log(`Found node ${node.id} at distance ${distance.toFixed(2)} from (${x}, ${y})`)
+      // }
       return distance <= tolerance
     }) || null
+    
+    return foundNode
   }, [graphState.nodes])
 
   // Add a connection between two nodes with a link
@@ -190,6 +195,22 @@ export const useGraphManager = () => {
         ...prev,
         nodes: updatedNodes,
         links: updatedLinks
+      }
+    })
+  }, [])
+
+  // Update a connection to point to different nodes
+  const updateConnection = useCallback((connectionId: string, newFromNode: string, newToNode: string) => {
+    setGraphState(prev => {
+      const updatedConnections = prev.connections.map(conn => 
+        conn.id === connectionId 
+          ? { ...conn, from_node: newFromNode, to_node: newToNode }
+          : conn
+      )
+      
+      return {
+        ...prev,
+        connections: updatedConnections
       }
     })
   }, [])
@@ -339,10 +360,12 @@ export const useGraphManager = () => {
       // Update the node
       const updatedNodes = prev.nodes.map(node => {
         if (node.id === nodeId) {
+          const newFixedLoc = fixed ? node.pos : undefined
           return {
             ...node,
             fixed,
-            fixed_loc: fixed ? node.pos : undefined
+            fixed_loc: newFixedLoc,
+            init_pos: fixed ? node.pos : node.init_pos // Update init_pos when fixing
           }
         }
         return node
@@ -353,7 +376,7 @@ export const useGraphManager = () => {
         conn.from_node === nodeId || conn.to_node === nodeId
       )
       
-      // Update has_fixed field on connected links
+      // Update has_fixed field and fixed_loc on connected links
       const updatedLinks = prev.links.map(link => {
         const connection = connectionsInvolving.find(conn => conn.link.id === link.id)
         if (!connection) return link
@@ -363,9 +386,24 @@ export const useGraphManager = () => {
         const toNode = updatedNodes.find(n => n.id === connection.to_node)
         const hasFixedNode = (fromNode?.fixed || false) || (toNode?.fixed || false)
         
+        // Set fixed_loc on the link if a connected node is fixed
+        let linkFixedLoc = link.fixed_loc
+        if (hasFixedNode) {
+          // Use the position of the fixed node as the link's fixed_loc
+          if (fromNode?.fixed && fromNode.fixed_loc) {
+            linkFixedLoc = fromNode.fixed_loc
+          } else if (toNode?.fixed && toNode.fixed_loc) {
+            linkFixedLoc = toNode.fixed_loc
+          }
+        } else {
+          // Clear fixed_loc if no nodes are fixed
+          linkFixedLoc = undefined
+        }
+        
         return {
           ...link,
-          has_fixed: hasFixedNode
+          has_fixed: hasFixedNode,
+          fixed_loc: linkFixedLoc
         }
       })
       
@@ -415,6 +453,7 @@ export const useGraphManager = () => {
     deleteLink,
     deleteNode,
     mergeNodes,
+    updateConnection,
     clearGraph,
     getGraphStructure,
     getUniqueZLevels,

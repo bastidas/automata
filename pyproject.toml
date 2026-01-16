@@ -29,7 +29,8 @@ dependencies = [
     "Flask",
     "python-dotenv",
     "websocket-client",
-    "pydantic == 2.12.4"
+    "pydantic == 2.12.4",
+    "pylinkage"
     ]
 
 [project.optional-dependencies]

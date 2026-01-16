@@ -5,6 +5,7 @@ import sys
 from configs.matplotlib_config import configure_matplotlib_for_backend
 configure_matplotlib_for_backend()
 
+from configs.appconfig import USER_DIR
 import networkx as nx
 import matplotlib.pyplot as plt
 from configs.link_models import Link, Node
@@ -16,61 +17,11 @@ from viz_tools.viz import (
     # animate_script,
     plot_static_pos,
     plot_static_arrows)
-from link.graph_tools import make_graph_simple
-
+from link.graph_tools import make_graph, make_force_graph
 import os
 from pathlib import Path
-# Define the user directory relative to this file's location
-user_dir = Path(__file__).parent.parent / "user"
-
-# Ensure the user directory exists
-user_dir.mkdir(exist_ok=True)
-
-# def make_3link(n_iterations):
-
-#     driven_link = Link(length=.4,
-#                 fixed_loc=(0, 0),
-#                 has_fixed=True,
-#                 n_iterations=n_iterations,
-#                 name="driven_link",
-#                 is_driven=True)  
-
-#     fixed_link = Link(length=.4,
-#                  has_fixed=True,
-#                 fixed_loc=(0.1, 1),
-#                 n_iterations=n_iterations,
-#                 name="fixed_link")  
-
-#     free_link = Link(length=.99,
-#                     has_fixed=False,
-#                     n_iterations=n_iterations,
-#                     name="free_link")
 
 
-#     graph = nx.Graph([
-#         (1, 2, {"link": driven_link}),
-#         (2,3, {"link": free_link}),
-#         (3,4, {"link": fixed_link}),
-#         ])
-
-#     graph.nodes[1]['fixed'] = True
-#     graph.nodes[1]['fixed_loc'] = (0.0, 0.0)
-#     graph.nodes[1]['pos'] = None
-
-#     graph.nodes[2]['fixed'] = False
-#     graph.nodes[2]['pos'] = None
-
-#     graph.nodes[3]['fixed'] = False
-#     graph.nodes[3]['pos'] = None
-
-#     graph.nodes[4]['fixed'] = True
-#     graph.nodes[4]['pos'] = None
-#     graph.nodes[4]['fixed_loc'] = (0.0, 1.0)
-
-#     links = [driven_link, free_link, fixed_link]
-#     nodes = [graph.nodes[n] for n in graph.nodes]
-#     return links, nodes, graph
-   
 
 def make_3link(n_iterations):
 
@@ -94,23 +45,23 @@ def make_3link(n_iterations):
 
     node1 = Node(name="node1",
                  n_iterations=n_iterations,
-                 #pos=None,
+                 #init_pos=(0.0, 0.0),
                  fixed=True,
                  fixed_loc=(0.0, 0.0))
     
     node2 = Node(name="node2",
                  n_iterations=n_iterations,
-                 #pos=None,
+                 #init_pos=None,
                  fixed=False)
     
     node3 = Node(name="node3",
                  n_iterations=n_iterations,
-                 #pos=None,
+                   init_pos=None,
                  fixed=False)   
     
     node4 = Node(name="node4",
                  n_iterations=n_iterations,
-                 #pos=None,
+                  init_pos=None,
                  fixed=True,
                  fixed_loc=(0.0, 1.0))
     
@@ -122,14 +73,10 @@ def make_3link(n_iterations):
         
     nodes = [node1, node2, node3, node4]
     links = [driven_link, free_link, fixed_link]
-    graph=make_graph_simple(
+    graph=make_graph(
         connections,
         links,
-        nodes,
-        n_iterations=n_iterations)
-
-    # Don't initialize positions - let run_graph solve the triangle geometry
-    # just like the original make_3link does
+        nodes)
 
     return links, nodes, graph
 
@@ -254,47 +201,27 @@ def make_5link(n_iterations):
     links = [drive_link, freelink1, freelink2, set_link1, set_link2]
     
     # Use make_graph_simple like make_3link
-    graph = make_graph_simple(
+    graph = make_graph(
         connections,
         links,
-        nodes,
-        n_iterations=n_iterations)
-
-    # Don't initialize positions - let run_graph solve the geometry
-    # just like the make_3link approach
-
+        nodes)
     return links, nodes, graph
+
 
 
 if __name__ == "__main__":
     n_iterations = 24
     
 
-    
-    # Use make_5link for the simulation
     links, nodes, graph = make_3link(n_iterations)
-    links, nodes, graph = make_5link(n_iterations)
+    #links, nodes, graph = make_5link(n_iterations)
 
-    import json
-
-    G = nx.barbell_graph(6, 3)
-    # this d3 example uses the name attribute for the mouse-hover value,
-    # so add a name to each node
-    for n in G:
-        G.nodes[n]["name"] = n
-    # write json formatted data
-    d = nx.node_link_data(G, edges="links")  # node-link format to serialize
-    # write json
-    #json.dump(d, open("force/force.json", "w"))
-   # json.dump(graph, open(user_dir / "force.json", "w"))
-    json.dump(d, open(user_dir / "force.json", "w"))
-
-
+    _ = make_force_graph(graph)
 
     times = np.linspace(0, 1, n_iterations )
     for i, t in enumerate(times):
         #print(i,t)
-        ng = run_graph(
+        _ = run_graph(
             i,
                 time=t,
                 omega=2*np.pi,
@@ -319,17 +246,17 @@ if __name__ == "__main__":
         links,
         i=0,  # Use a specific time index instead of the whole times array
         title="Linkage Arrows - 3 Link System",
-        out_path=user_dir / "linkage_arrows.png")
+        out_path=USER_DIR / "linkage_arrows.png")
 
 
     plot_static_pos(
         links,
         times,
         title="Linkage Positions - 3 Link System",
-        out_path=user_dir / "linkage_positions.png",
+        out_path=USER_DIR / "linkage_positions.png",
         show_end_points=True,
-        show_fixed_links=True,
-        show_free_links=True,
+        show_fixed_links =True,
+        show_free_links =False,
         show_paths=True,
         show_pivot_points=True)
     
@@ -337,6 +264,6 @@ if __name__ == "__main__":
     from viz_tools.animate import animate_script
     animate_script(n_iterations,
                    links,
-                   fname='animationvvv.gif',
+                   fname='animation.gif',
                    square=True)
     

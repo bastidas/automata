@@ -1,6 +1,10 @@
 
 
 import numpy as np
+# Configure matplotlib for backend use BEFORE any matplotlib imports  
+from configs.matplotlib_config import configure_matplotlib_for_backend
+configure_matplotlib_for_backend()
+
 import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.animation import FuncAnimation

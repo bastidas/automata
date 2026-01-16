@@ -26,14 +26,14 @@ class Node(BaseModel):
     target_cost_func: Optional[str] = Field(default=None, description="Target cost function if applicable")
     n_iterations: Annotated[int, Field(ge=1, le=1000, description="Number of iterations for simulation")]
     
-    init_pos: Optional[Tuple[float, float]] = Field(description="Initial position coordinates (x, y)")
+    init_pos: Optional[Tuple[float, float]] = Field(default=None, description="Initial position coordinates (x, y)")
     #unhasables:
     pos: Optional[np.ndarray] = None  #unhashables/mutables:
 
     model_config = {
         "arbitrary_types_allowed": True,  # Allow numpy arrays
         # Validate on assignment
-         "validate_assignment": True,
+        "validate_assignment": True,
         "extra": "forbid", # Allow extra attributes like pos1, pos2
     }
 
@@ -42,7 +42,8 @@ class Node(BaseModel):
         if self.pos is None:
             self.pos = np.empty((self.n_iterations, 2))
             self.pos[:] = np.nan
-            self.pos[0,:] = self.init_pos
+            if self.init_pos is not None:
+                self.pos[0,:] = self.init_pos
         elif self.init_pos is not None:
             #assert np.shape(self.pos) == (self.n_iterations, 2), "pos must have shape (n_iterations, 2)"
             assert self.pos[0,:][0] == self.init_pos[0] and self.pos[0,:][1] == self.init_pos[1], "pos first entry must match init_pos"

@@ -48,15 +48,35 @@ const ForceGraph: React.FC<ForceGraphProps> = ({ data }) => {
       .force("charge", d3.forceManyBody())
       .force("center", d3.forceCenter(width / 2, height / 2))
 
-    // Add links - matching the original force.css styling
+    // Add links - with color coding for driven links
     const link = svg.append("g")
       .attr("class", "links")
       .selectAll("line")
       .data(links)
       .enter().append("line")
       .style("fill", "none")
-      .style("stroke", "#9ecae1")
-      .style("stroke-width", "0.5px")
+      .style("stroke", (d: any) => {
+        // Check if this link is driven (blue for driven, black for others)
+        const isDrivern = d.link && d.link.is_driven
+        return isDrivern ? "#1f77b4" : "#000000ff"
+      })
+      .style("stroke-width", (d: any) => {
+        // Make driven links slightly thicker
+        const isDrivern = d.link && d.link.is_driven
+        return isDrivern ? "2px" : "1px"
+      })
+
+    // Add link labels
+    const linkLabels = svg.append("g")
+      .attr("class", "link-labels")
+      .selectAll("text")
+      .data(links)
+      .enter().append("text")
+      .style("font-size", "10px")
+      .style("fill", "#666")
+      .style("text-anchor", "middle")
+      .style("pointer-events", "none")
+      .style("user-select", "none")
 
     // Add nodes - matching the original force.css styling
     const node = svg.append("g")
@@ -66,9 +86,9 @@ const ForceGraph: React.FC<ForceGraphProps> = ({ data }) => {
       .enter().append("circle")
       .attr("r", 5)
       .style("cursor", "pointer")
-      .style("fill", "#ff3399")
-      .style("stroke", "#000")
-      .style("stroke-width", "0.5px")
+      .style("fill", "#323232ff")
+      .style("stroke", "#ffffffff")
+      .style("stroke-width", "1px")
       .call(d3.drag<SVGCircleElement, any>()
         .on("start", (event, d: any) => {
           if (!event.active) simulation.alphaTarget(0.3).restart()
@@ -85,9 +105,23 @@ const ForceGraph: React.FC<ForceGraphProps> = ({ data }) => {
           d.fy = null
         }))
 
+    // Add node labels
+    const nodeLabels = svg.append("g")
+      .attr("class", "node-labels")
+      .selectAll("text")
+      .data(nodes)
+      .enter().append("text")
+      .style("font-size", "12px")
+      .style("fill", "#333")
+      .style("text-anchor", "middle")
+      .style("pointer-events", "none")
+      .style("user-select", "none")
+      .style("font-weight", "bold")
+      .text((d: any) => d.name || d.id)
+
     // Add tooltips
     node.append("title")
-      .text((d: any) => d.id)
+      .text((d: any) => d.name || d.id)
 
     // Set up the simulation
     simulation
@@ -106,9 +140,32 @@ const ForceGraph: React.FC<ForceGraphProps> = ({ data }) => {
         .attr("x2", (d: any) => d.target.x)
         .attr("y2", (d: any) => d.target.y)
 
+      // Update link labels with positions and angles
+      linkLabels
+        .attr("x", (d: any) => (d.source.x + d.target.x) / 2)
+        .attr("y", (d: any) => (d.source.y + d.target.y) / 2)
+        .attr("transform", (d: any) => {
+          const dx = d.target.x - d.source.x
+          const dy = d.target.y - d.source.y
+          const angle = Math.atan2(dy, dx) * 180 / Math.PI
+          return `rotate(${angle}, ${(d.source.x + d.target.x) / 2}, ${(d.source.y + d.target.y) / 2})`
+        })
+        .text((d: any) => {
+          //const dx = d.target.x - d.source.x
+          //const dy = d.target.y - d.source.y
+          //const angle = Math.atan2(dy, dx) * 180 / Math.PI
+          const linkName = d.link ? d.link.name : 'link'
+          return `${linkName}`
+        })
+
       node
         .attr("cx", (d: any) => d.x)
         .attr("cy", (d: any) => d.y)
+
+      // Update node labels
+      nodeLabels
+        .attr("x", (d: any) => d.x)
+        .attr("y", (d: any) => d.y - 8) // Position above the node
     }
 
     return () => {
@@ -141,7 +198,7 @@ const GraphViewTab: React.FC = () => {
     setError(null)
     
     try {
-      const response = await fetch('api/load-graph', {
+      const response = await fetch('api/load-last-force-graph', {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json'
@@ -153,6 +210,12 @@ const GraphViewTab: React.FC = () => {
       }
       
       const data = await response.json()
+      
+      // Check if the response contains an error
+      if (data.error) {
+        throw new Error(data.error)
+      }
+      
       setGraphData(data)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error occurred')
@@ -164,7 +227,7 @@ const GraphViewTab: React.FC = () => {
   return (
     <Box sx={{ p: 2 }}>
       <Typography variant="h4" component="h2" gutterBottom>
-        Graph View
+        Force Graph View
       </Typography>
       
       <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
@@ -174,7 +237,7 @@ const GraphViewTab: React.FC = () => {
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" gutterBottom>
-            Load Graph Data
+            Load Force Graph Data
           </Typography>
           
           <Button
@@ -184,7 +247,7 @@ const GraphViewTab: React.FC = () => {
             disabled={loading}
             sx={{ mb: 2 }}
           >
-            {loading ? 'Loading...' : 'Load Graph from File'}
+            {loading ? 'Loading...' : 'Load Most Recent Force Graph'}
           </Button>
           
           {error && (

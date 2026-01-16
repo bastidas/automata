@@ -1,5 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import os
+
+from configs.appconfig import USER_DIR
 
 app = FastAPI(title="Acinonyx API")
 
@@ -23,34 +26,84 @@ def get_status():
         "message": "Acinonyx backend is running successfully"
     }
 
-@app.get("/load-graph")
-def load_graph():
-    """Load graph data from blank JSON file in user directory"""
+@app.get("/load-last-saved-graph")
+def load_last_saved_graph():
+    """Load the most recently saved graph from the graphs directory"""
     import json
-    import os
     from pathlib import Path
     
     try:
-        # Get the user directory path relative to the backend
-        user_dir = Path(__file__).parent.parent / "user"
-        json_file = user_dir / "force.json"
-        #json.dump(graph, open(user_dir / "force.json", "w"))
-
+        graphs_dir = USER_DIR / "graphs"
         
-        if not json_file.exists():
+        if not graphs_dir.exists():
             return {
-                "error": "Graph file not found",
-                "path": str(json_file)
+                "status": "error",
+                "message": "No saved graphs directory found"
             }
         
-        with open(json_file, 'r') as f:
+        # Find all graph JSON files
+        graph_files = list(graphs_dir.glob("graph_*.json"))
+        
+        if not graph_files:
+            return {
+                "status": "error", 
+                "message": "No saved graphs found"
+            }
+        
+        # Get the most recent file by modification time
+        latest_file = max(graph_files, key=lambda f: f.stat().st_mtime)
+        
+        with open(latest_file, 'r') as f:
             graph_data = json.load(f)
-            print(graph_data)
+        
+        return {
+            "status": "success",
+            "message": f"Loaded graph from {latest_file.name}",
+            "filename": latest_file.name,
+            "graph_data": graph_data
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to load last saved graph: {str(e)}"
+        }
+
+@app.get("/load-last-force-graph")
+def load_force_graph():
+    """Load the most recent force graph from the force_graphs directory"""
+    import json
+    from pathlib import Path
+    
+    try:
+        force_graphs_dir = USER_DIR / "force_graphs"
+        
+        if not force_graphs_dir.exists():
+            return {
+                "error": "No force_graphs directory found",
+                "path": str(force_graphs_dir)
+            }
+        
+        # Find all force graph JSON files
+        force_graph_files = list(force_graphs_dir.glob("force_graph_*.json"))
+        
+        if not force_graph_files:
+            return {
+                "error": "No force graphs found in force_graphs directory"
+            }
+        
+        # Get the most recent file by modification time
+        latest_file = max(force_graph_files, key=lambda f: f.stat().st_mtime)
+        
+        with open(latest_file, 'r') as f:
+            graph_data = json.load(f)
+        
+        print(f"Loaded force graph from: {latest_file.name}")
         return graph_data
         
     except Exception as e:
         return {
-            "error": f"Failed to load graph data: {str(e)}"
+            "error": f"Failed to load force graph: {str(e)}"
         }
 
 @app.post("/links")
@@ -131,13 +184,143 @@ def modify_link(request: dict):
             "message": f"Failed to modify link: {str(e)}"
         }
 
+def extract_path_visualization_data(link_objects, n_iterations):
+    """
+    Extract path visualization data from computed links.
+    Returns serializable data for frontend visualization.
+    """
+    import numpy as np
+    
+    # Color palette similar to matplotlib's Spectral colormap
+    def get_spectral_color(t):
+        """Generate color similar to matplotlib Spectral colormap"""
+        # Simple approximation of Spectral colormap
+        if t < 0.25:
+            r = 158 + int((255-158) * t * 4)
+            g = 1 + int((116-1) * t * 4) 
+            b = 5 + int((9-5) * t * 4)
+        elif t < 0.5:
+            r = 255 - int((255-255) * (t-0.25) * 4)
+            g = 116 + int((217-116) * (t-0.25) * 4)
+            b = 9 + int((54-9) * (t-0.25) * 4)
+        elif t < 0.75:
+            r = 255 - int((255-171) * (t-0.5) * 4)
+            g = 217 + int((221-217) * (t-0.5) * 4)
+            b = 54 + int((164-54) * (t-0.5) * 4)
+        else:
+            r = 171 - int((171-94) * (t-0.75) * 4)
+            g = 221 - int((221-79) * (t-0.75) * 4)
+            b = 164 - int((164-162) * (t-0.75) * 4)
+        
+        return f"#{r:02x}{g:02x}{b:02x}"
+    
+    # Calculate bounds for visualization
+    all_positions = []
+    for link in link_objects:
+        if hasattr(link, 'pos1') and link.pos1 is not None:
+            all_positions.extend(link.pos1.tolist())
+        if hasattr(link, 'pos2') and link.pos2 is not None:
+            all_positions.extend(link.pos2.tolist())
+    
+    if not all_positions:
+        return {"bounds": None, "links": [], "history_data": []}
+    
+    all_positions = np.array(all_positions)
+    xmin, ymin = np.min(all_positions, axis=0)
+    xmax, ymax = np.max(all_positions, axis=0)
+    
+    # Make square bounds with margin
+    xdelta = xmax - xmin
+    ydelta = ymax - ymin
+    delta = max(xdelta, ydelta)
+    margin = 0.2
+    
+    bounds = {
+        "xmin": float(xmin - delta * margin),
+        "xmax": float(xmax + delta * margin), 
+        "ymin": float(ymin - delta * margin),
+        "ymax": float(ymax + delta * margin)
+    }
+    
+    # Extract link animation data
+    links_data = []
+    for link in link_objects:
+        if hasattr(link, 'pos1') and hasattr(link, 'pos2') and link.pos1 is not None and link.pos2 is not None:
+            link_data = {
+                "name": link.name,
+                "is_driven": getattr(link, 'is_driven', False),
+                "has_fixed": getattr(link, 'has_fixed', False),
+                "has_constraint": getattr(link, 'has_constraint', False),
+                "pos1": link.pos1.tolist(),  # Convert numpy to list for JSON serialization
+                "pos2": link.pos2.tolist()
+            }
+            links_data.append(link_data)
+    
+    # Generate historical trail data for free links (similar to animate_script)
+    history_data = []
+    n_history = int(n_iterations * 0.66)
+    
+    for frame in range(n_iterations):
+        frame_history = []
+        
+        # Calculate history window
+        start_idx = max(0, frame - n_history)
+        end_idx = frame
+        
+        for link in link_objects:
+            if (hasattr(link, 'pos2') and link.pos2 is not None and 
+                not getattr(link, 'has_fixed', False) and 
+                not getattr(link, 'has_constraint', False)):
+                
+                # Get historical positions for this frame
+                history_positions = link.pos2[start_idx:end_idx].tolist()
+                
+                # Generate colors for history trail
+                history_colors = []
+                for i, pos in enumerate(history_positions):
+                    alpha = 1.0 / (1 + (len(history_positions) - i))
+                    color_t = (start_idx + i) / n_iterations
+                    color = get_spectral_color(color_t)
+                    history_colors.append({"color": color, "alpha": alpha})
+                
+                frame_history.append({
+                    "link_name": link.name,
+                    "positions": history_positions,
+                    "colors": history_colors
+                })
+        
+        history_data.append(frame_history)
+    
+    return {
+        "bounds": bounds,
+        "links": links_data,
+        "history_data": history_data,
+        "n_iterations": n_iterations
+    }
+
 @app.post("/compute-graph")
 def compute_graph(graph_data: dict):
     """Compute the mechanical linkage graph following the make_3link pattern"""
     
+    # Save the graph data at the very start
+    from datetime import datetime
+    import json
+    
+    time_mark = datetime.now().strftime("%Y%m%d_%H%M%S")
+    graphs_dir = USER_DIR / "graphs"
+    graphs_dir.mkdir(exist_ok=True)  # Create graphs directory if it doesn't exist
+    save_path = graphs_dir / f"graph_{time_mark}.json"
+    
+    try:
+        with open(save_path, "w") as f:
+            json.dump(graph_data, f, indent=2)
+        print(f"Graph data saved to: {save_path}")
+    except Exception as e:
+        print(f"Warning: Failed to save graph data: {e}")
+
     try:
         # Import here to avoid circular imports
-        from link.graph_tools import make_graph_simple
+        from link.graph_tools import make_graph, make_force_graph
         from configs.link_models import Link, Node
         import numpy as np
         n_iterations = 24
@@ -307,15 +490,56 @@ def compute_graph(graph_data: dict):
         # Step 5: Call make_graph_simple with n_iterations = 24 (like make_3link)
         print(f"Calling make_graph_simple with {len(node_objects)} nodes, {len(link_objects)} links, {len(processed_connections)} connections")
         
-        graph = make_graph_simple(
+        graph = make_graph(
             processed_connections,
             link_objects,
-            node_objects, 
-            n_iterations=n_iterations
+            node_objects
         )
         
         print("✓ Graph computation completed successfully")
         
+        _ = make_force_graph(graph)
+        
+        from link.graph_tools import run_graph
+        times = np.linspace(0, 1, n_iterations )
+        for i, t in enumerate(times):
+            #print(i,t)
+            _ = run_graph(
+                i,
+                    time=t,
+                    omega=2*np.pi,
+                    link_graph=graph,
+                    verbose=1 if i == 0 else 0)  # Verbose for first iteration only
+            
+
+
+
+        from viz_tools.animate import animate_script
+        time_mark = datetime.now().strftime("%Y%m%d_%H%M%S")
+        agraphs_dir = USER_DIR / "animations"
+        agraphs_dir.mkdir(exist_ok=True)  # Create force graphs directory if it doesn't exist
+        save_path = str(agraphs_dir / f"animation_{time_mark}.gif")
+        
+        #links = [Link(**link.model_dump()) for link in graph.links]
+
+        link_objs = []
+        for edge in graph.edges(data=True):
+            node1, node2, edge_data = edge
+            link: Link = edge_data['link']
+            link_objs.append(link)
+
+        try:
+            animate_script(
+                n_iterations,
+                link_objs,
+                fname=save_path,
+                square=True)
+        except Exception as e:
+            print(f"Warning: failed to make animation : {e}")
+
+        # Extract path visualization data
+        path_data = extract_path_visualization_data(link_objects, n_iterations)
+
         return {
             "status": "success", 
             "message": "Graph computed successfully",
@@ -328,7 +552,8 @@ def compute_graph(graph_data: dict):
             "graph_info": {
                 "nodes": len(node_objects),
                 "links": len(link_objects)
-            }
+            },
+            "path_data": path_data
         }
         
     except Exception as e:

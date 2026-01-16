@@ -1,0 +1,309 @@
+import React, { useState, useRef, useEffect } from 'react'
+import {
+  Box,
+  Typography,
+  Button,
+  Card,
+  CardContent,
+  Slider,
+  FormControlLabel,
+  Switch,
+  Grid
+} from '@mui/material'
+import PlayArrowIcon from '@mui/icons-material/PlayArrow'
+import PauseIcon from '@mui/icons-material/Pause'
+import StopIcon from '@mui/icons-material/Stop'
+
+interface PathVisualizationProps {
+  pathData: {
+    bounds: {
+      xmin: number
+      xmax: number
+      ymin: number
+      ymax: number
+    } | null
+    links: Array<{
+      name: string
+      is_driven: boolean
+      has_fixed: boolean
+      has_constraint: boolean
+      pos1: number[][]
+      pos2: number[][]
+    }>
+    history_data: Array<Array<{
+      link_name: string
+      positions: number[][]
+      colors: Array<{
+        color: string
+        alpha: number
+      }>
+    }>>
+    n_iterations: number
+  } | null
+}
+
+const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [currentFrame, setCurrentFrame] = useState(0)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [showHistory, setShowHistory] = useState(true)
+  const [playbackSpeed, setPlaybackSpeed] = useState(50) // ms per frame
+  const animationRef = useRef<number>()
+
+  useEffect(() => {
+    if (pathData) {
+      drawFrame(currentFrame)
+    }
+  }, [pathData, currentFrame, showHistory])
+
+  useEffect(() => {
+    if (isPlaying && pathData) {
+      animationRef.current = setInterval(() => {
+        setCurrentFrame(prev => (prev + 1) % pathData.n_iterations)
+      }, playbackSpeed)
+    } else {
+      if (animationRef.current) {
+        clearInterval(animationRef.current)
+      }
+    }
+
+    return () => {
+      if (animationRef.current) {
+        clearInterval(animationRef.current)
+      }
+    }
+  }, [isPlaying, playbackSpeed, pathData])
+
+  const drawFrame = (frame: number) => {
+    if (!pathData || !canvasRef.current) return
+
+    const canvas = canvasRef.current
+    const ctx = canvas.getContext('2d')
+    if (!ctx || !pathData.bounds) return
+
+    // Clear canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    
+    const { bounds, links, history_data } = pathData
+    const canvasWidth = canvas.width
+    const canvasHeight = canvas.height
+
+    // Transform coordinates from data space to canvas space
+    const transformX = (x: number) => 
+      ((x - bounds.xmin) / (bounds.xmax - bounds.xmin)) * canvasWidth
+    const transformY = (y: number) => 
+      canvasHeight - ((y - bounds.ymin) / (bounds.ymax - bounds.ymin)) * canvasHeight
+
+    // Draw historical trails if enabled
+    if (showHistory && history_data[frame]) {
+      for (const historyItem of history_data[frame]) {
+        for (let i = 0; i < historyItem.positions.length; i++) {
+          const pos = historyItem.positions[i]
+          const colorInfo = historyItem.colors[i]
+          
+          ctx.globalAlpha = colorInfo.alpha
+          ctx.fillStyle = colorInfo.color
+          ctx.beginPath()
+          ctx.arc(transformX(pos[0]), transformY(pos[1]), 3, 0, 2 * Math.PI)
+          ctx.fill()
+        }
+      }
+    }
+
+    // Reset alpha for main elements
+    ctx.globalAlpha = 1.0
+
+    // Generate frame color (similar to matplotlib Spectral colormap)
+    const rotationFraction = frame / pathData.n_iterations
+    const frameColor = getSpectralColor(rotationFraction)
+
+    // Draw current frame links and nodes
+    for (const link of links) {
+      if (frame < link.pos1.length && frame < link.pos2.length) {
+        const pos1 = link.pos1[frame]
+        const pos2 = link.pos2[frame]
+        
+        const x1 = transformX(pos1[0])
+        const y1 = transformY(pos1[1])
+        const x2 = transformX(pos2[0])
+        const y2 = transformY(pos2[1])
+
+        // Draw link line
+        ctx.strokeStyle = frameColor
+        ctx.lineWidth = link.is_driven ? 3 : 2
+        ctx.beginPath()
+        ctx.moveTo(x1, y1)
+        ctx.lineTo(x2, y2)
+        ctx.stroke()
+
+        // Draw nodes (pos1 and pos2)
+        ctx.fillStyle = frameColor
+        
+        // pos1 node
+        ctx.beginPath()
+        ctx.arc(x1, y1, 4, 0, 2 * Math.PI)
+        ctx.fill()
+        
+        // pos2 node
+        ctx.beginPath()
+        ctx.arc(x2, y2, 4, 0, 2 * Math.PI)
+        ctx.fill()
+
+        // Add link name labels
+        const midX = (x1 + x2) / 2
+        const midY = (y1 + y2) / 2
+        
+        ctx.fillStyle = '#333'
+        ctx.font = '10px Arial'
+        ctx.textAlign = 'center'
+        ctx.fillText(link.name, midX, midY - 5)
+      }
+    }
+
+    // Draw frame info
+    ctx.fillStyle = '#333'
+    ctx.font = '14px Arial'
+    ctx.textAlign = 'left'
+    ctx.fillText(`Frame: ${frame + 1}/${pathData.n_iterations}`, 10, 20)
+  }
+
+  const getSpectralColor = (t: number): string => {
+    // Simple approximation of matplotlib Spectral colormap
+    let r, g, b
+    if (t < 0.25) {
+      r = 158 + Math.floor((255-158) * t * 4)
+      g = 1 + Math.floor((116-1) * t * 4)
+      b = 5 + Math.floor((9-5) * t * 4)
+    } else if (t < 0.5) {
+      r = 255 - Math.floor((255-255) * (t-0.25) * 4)
+      g = 116 + Math.floor((217-116) * (t-0.25) * 4)
+      b = 9 + Math.floor((54-9) * (t-0.25) * 4)
+    } else if (t < 0.75) {
+      r = 255 - Math.floor((255-171) * (t-0.5) * 4)
+      g = 217 + Math.floor((221-217) * (t-0.5) * 4)
+      b = 54 + Math.floor((164-54) * (t-0.5) * 4)
+    } else {
+      r = 171 - Math.floor((171-94) * (t-0.75) * 4)
+      g = 221 - Math.floor((221-79) * (t-0.75) * 4)
+      b = 164 - Math.floor((164-162) * (t-0.75) * 4)
+    }
+    
+    return `rgb(${r}, ${g}, ${b})`
+  }
+
+  const handlePlay = () => {
+    setIsPlaying(!isPlaying)
+  }
+
+  const handleStop = () => {
+    setIsPlaying(false)
+    setCurrentFrame(0)
+  }
+
+  const handleFrameChange = (_: Event, value: number | number[]) => {
+    if (typeof value === 'number') {
+      setCurrentFrame(value)
+    }
+  }
+
+  if (!pathData || !pathData.bounds) {
+    return (
+      <Card>
+        <CardContent>
+          <Typography variant="h6">Path Visualization</Typography>
+          <Typography color="text.secondary">
+            No path data available. Run compute graph to generate visualization data.
+          </Typography>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <CardContent>
+        <Typography variant="h6" gutterBottom>
+          Path Visualization
+        </Typography>
+        
+        <Box sx={{ mb: 2 }}>
+          <canvas
+            ref={canvasRef}
+            width={800}
+            height={600}
+            style={{
+              border: '1px solid #ccc',
+              borderRadius: '4px',
+              backgroundColor: '#fff',
+              display: 'block',
+              margin: '0 auto'
+            }}
+          />
+        </Box>
+
+        <Grid container spacing={2} alignItems="center">
+          <Grid item>
+            <Button
+              variant="contained"
+              onClick={handlePlay}
+              startIcon={isPlaying ? <PauseIcon /> : <PlayArrowIcon />}
+            >
+              {isPlaying ? 'Pause' : 'Play'}
+            </Button>
+          </Grid>
+          
+          <Grid item>
+            <Button
+              variant="outlined"
+              onClick={handleStop}
+              startIcon={<StopIcon />}
+            >
+              Stop
+            </Button>
+          </Grid>
+
+          <Grid item xs>
+            <Typography gutterBottom>Frame</Typography>
+            <Slider
+              value={currentFrame}
+              onChange={handleFrameChange}
+              min={0}
+              max={pathData.n_iterations - 1}
+              step={1}
+              marks
+              valueLabelDisplay="auto"
+            />
+          </Grid>
+        </Grid>
+
+        <Grid container spacing={2} sx={{ mt: 1 }}>
+          <Grid item>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={showHistory}
+                  onChange={(e) => setShowHistory(e.target.checked)}
+                />
+              }
+              label="Show History Trail"
+            />
+          </Grid>
+          
+          <Grid item xs>
+            <Typography gutterBottom>Playback Speed (ms/frame)</Typography>
+            <Slider
+              value={playbackSpeed}
+              onChange={(_, value) => setPlaybackSpeed(value as number)}
+              min={10}
+              max={200}
+              step={10}
+              valueLabelDisplay="auto"
+            />
+          </Grid>
+        </Grid>
+      </CardContent>
+    </Card>
+  )
+}
+
+export default PathVisualization

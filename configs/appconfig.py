@@ -1,9 +1,12 @@
 # Application Configuration
 # Centralized configuration for all ports and endpoints
+# import os
+from pathlib import Path
 
 class AppConfig:
     """Centralized application configuration"""
     
+    USER_DIR = Path(__file__).parent.parent / "user"
     # Port Configuration
     FRONTEND_PORT = 5173
     BACKEND_PORT = 8021
@@ -32,3 +35,4 @@ FRONTEND_PORT = AppConfig.FRONTEND_PORT
 BACKEND_PORT = AppConfig.BACKEND_PORT
 FRONTEND_URL = AppConfig.FRONTEND_URL
 BACKEND_URL = AppConfig.BACKEND_URL
+USER_DIR = AppConfig.USER_DIR
