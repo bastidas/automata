@@ -48,6 +48,18 @@ port_available() {
     ! lsof -i:$1 >/dev/null 2>&1
 }
 
+# Stream a log file with prefix, filtering empty lines
+stream_log() {
+    local file="$1"
+    local prefix="$2"
+    local color="$3"
+    if [ -f "$file" ]; then
+        tail -f -n 0 "$file" | awk 'NF' | while IFS= read -r line; do
+            echo -e "${color}[${prefix}]${NC} $line"
+        done
+    fi
+}
+
 # Function to wait for service to be ready
 wait_for_service() {
     local url=$1
@@ -80,6 +92,12 @@ cleanup() {
     if [ ! -z "$FRONTEND_PID" ]; then
         kill $FRONTEND_PID 2>/dev/null || true
         print_status "Frontend server stopped"
+    fi
+    if [ ! -z "$LOG_BACKEND_STREAM_PID" ]; then
+        kill $LOG_BACKEND_STREAM_PID 2>/dev/null || true
+    fi
+    if [ ! -z "$LOG_FRONTEND_STREAM_PID" ]; then
+        kill $LOG_FRONTEND_STREAM_PID 2>/dev/null || true
     fi
     exit 0
 }
@@ -184,7 +202,7 @@ print_status "Backend logs are being written to: backend.log"
 print_status "Backend startup logs:"
 echo -e "${BLUE}----------------------------------------${NC}"
 sleep 2
-tail -10 backend.log | while read line; do
+tail -10 backend.log | awk 'NF' | while read line; do
     echo -e "${BLUE}[BACKEND]${NC} $line"
 done
 echo -e "${BLUE}----------------------------------------${NC}"
@@ -212,7 +230,7 @@ print_status "Frontend logs are being written to: frontend.log"
 print_status "Frontend startup logs:"
 echo -e "${GREEN}----------------------------------------${NC}"
 sleep 3
-tail -10 frontend.log | while read line; do
+tail -10 frontend.log | awk 'NF' | while read line; do
     echo -e "${GREEN}[FRONTEND]${NC} $line"
 done
 echo -e "${GREEN}----------------------------------------${NC}"
@@ -256,33 +274,11 @@ echo
 print_status "Monitoring logs... Press Ctrl+C to stop all services"
 echo
 
-# Monitor both services and show logs
-while true; do
-    # Check if processes are still running
-    if ! kill -0 $BACKEND_PID 2>/dev/null; then
-        print_error "Backend process died unexpectedly"
-        cleanup
-        exit 1
-    fi
-    
-    if ! kill -0 $FRONTEND_PID 2>/dev/null; then
-        print_error "Frontend process died unexpectedly"
-        cleanup
-        exit 1
-    fi
-    
-    # Show recent log entries if they exist
-    if [ -f backend.log ]; then
-        tail -0f backend.log | while read line; do
-            echo -e "${BLUE}[BACKEND]${NC} $line"
-        done &
-    fi
-    
-    if [ -f frontend.log ]; then
-        tail -0f frontend.log | while read line; do
-            echo -e "${GREEN}[FRONTEND]${NC} $line"
-        done &
-    fi
-    
-    sleep 5
-done
+# Stream logs once (filtered), keep script alive to allow Ctrl+C
+stream_log backend.log BACKEND "$BLUE" &
+LOG_BACKEND_STREAM_PID=$!
+stream_log frontend.log FRONTEND "$GREEN" &
+LOG_FRONTEND_STREAM_PID=$!
+
+# Wait for background streams
+wait

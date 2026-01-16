@@ -49,10 +49,10 @@ function App() {
             }} 
           />
           <Typography variant="h5" component="h1" gutterBottom>
-            Acinonyx - Mechanical Linkage Simulation
+            Acinonyx
           </Typography>
           <Typography variant="subtitle1" color="text.secondary">
-            Fast and agile like a cheetah
+          Mechanical Linkage Simulation
           </Typography>
         </Box>
 

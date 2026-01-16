@@ -1,5 +1,13 @@
 // Type definitions for Acinonyx frontend
 
+// Frontend-specific metadata for links (not sent to backend)
+export interface LinkMeta {
+  id: string // Generated on frontend, required for UI
+  start_point?: [number, number] // For rendering link position
+  end_point?: [number, number] // For rendering link position
+  color?: string // Display color
+}
+
 export interface Link {
   // Required fields matching backend ground truth
   name: string // Required in backend
@@ -16,11 +24,8 @@ export interface Link {
   flip?: boolean
   zlevel?: number
   
-  // Frontend-specific properties for UI
-  id: string // Generated on frontend, required for UI
-  start_point?: [number, number]
-  end_point?: [number, number]
-  color?: string
+  // Frontend metadata (single source of truth for UI properties)
+  meta: LinkMeta
 }
 
 export interface Node {
@@ -71,10 +76,11 @@ export interface ModifyLinkRequest {
   value: any
 }
 
+// Connection is now a lightweight reference - link data lives in links array only
 export interface Connection {
   from_node: string
   to_node: string
-  link: Link
+  link_id: string // Reference to link by meta.id - NOT an embedded link object
 }
 
 
@@ -83,3 +89,6 @@ export interface StatusResponse {
   status: string
   message?: string
 }
+
+// Helper type for extracting backend-only fields from Link (excludes meta)
+export type BackendLink = Omit<Link, 'meta'>

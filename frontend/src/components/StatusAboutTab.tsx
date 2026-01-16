@@ -85,22 +85,24 @@ const StatusAboutTab: React.FC = () => {
             About Acinonyx
           </Typography>
           <Typography variant="body1" paragraph>
-            Acinonyx is a high-speed mechanical linkage simulation platform, designed to be as fast and agile as a cheetah.
+            Acinonyx is mechanical linkage design and simulation platform. Desinged in particular to aid the design and simulation of orgnaic automata with complex contraints.
           </Typography>
           <Typography variant="body1" paragraph>
             Features:
           </Typography>
           <Typography variant="body2" component="ul" sx={{ pl: 2 }}>
-            <li>High-performance mechanical linkage simulation</li>
+            <li>mechanical linkage simulation</li>
             <li>Interactive graph-based system design</li>
-            <li>Real-time visualization and animation</li>
+            <li> visualization and animation</li>
             <li>FastAPI backend for efficient processing</li>
           </Typography>
         </CardContent>
       </Card>
       
       <Typography variant="body2" align="center" sx={{ mt: 4, color: 'text.secondary' }}>
-        Acinonyx connects to the FastAPI backend to deliver high-speed mechanical linkage simulation capabilities.
+      maybe a Attribution-ShareAlike 4.0 license here?
+<br></br>
+      https://github.com/bastidas/automata
       </Typography>
     </Box>
   )

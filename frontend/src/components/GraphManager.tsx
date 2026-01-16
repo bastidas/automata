@@ -1,19 +1,47 @@
 import React, { useState, useCallback } from 'react'
 import { Link, Node, Connection } from '../response_models'
 
+// ============================================================================
+// Pure Utility Functions
+// ============================================================================
+
+/**
+ * Calculate Euclidean distance between two points in unit coordinates
+ */
+export const calculateLength = (point1: [number, number], point2: [number, number]): number => {
+  const dx = point2[0] - point1[0]
+  const dy = point2[1] - point1[1]
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+// ============================================================================
+// Graph State & Types
+// ============================================================================
+
 // Graph management utilities
 export interface GraphNode extends Node {
   connections: string[] // Array of connection IDs this node participates in
 }
 
+// GraphConnection extends Connection with an internal id for tracking
 export interface GraphConnection extends Connection {
-  id: string
+  id: string // Internal connection tracking id
 }
 
 export interface GraphState {
   nodes: GraphNode[]
   connections: GraphConnection[]
-  links: Link[]
+  links: Link[] // Single source of truth for all link data
+}
+
+// ============================================================================
+// Link Deletion Helper Type
+// ============================================================================
+
+export interface DeleteItem {
+  type: 'link' | 'node'
+  id: string
+  name: string
 }
 
 // Hook for managing graph state
@@ -23,6 +51,18 @@ export const useGraphManager = () => {
     connections: [],
     links: []
   })
+
+  // ============================================================================
+  // Helper: Look up link by meta.id (single source of truth)
+  // ============================================================================
+  const getLinkById = useCallback((linkId: string): Link | undefined => {
+    return graphState.links.find(link => link.meta.id === linkId)
+  }, [graphState.links])
+
+  // Helper to get link for a connection
+  const getLinkForConnection = useCallback((conn: GraphConnection): Link | undefined => {
+    return graphState.links.find(link => link.meta.id === conn.link_id)
+  }, [graphState.links])
 
   // Add a new node
   const addNode = useCallback((x: number, y: number, id?: string): GraphNode => {
@@ -74,9 +114,6 @@ export const useGraphManager = () => {
       const distance = Math.sqrt(
         Math.pow(x - node.pos[0], 2) + Math.pow(y - node.pos[1], 2)
       )
-      // if (distance <= tolerance) {
-      //   console.log(`Found node ${node.id} at distance ${distance.toFixed(2)} from (${x}, ${y})`)
-      // }
       return distance <= tolerance
     }) || null
     
@@ -94,16 +131,17 @@ export const useGraphManager = () => {
       const hasFixedNode = (fromNode?.fixed || false) || (toNode?.fixed || false)
       
       // Update link with correct has_fixed field
-      const updatedLink = {
+      const updatedLink: Link = {
         ...link,
         has_fixed: hasFixedNode
       }
       
+      // Connection now only references link by id
       const newConnection: GraphConnection = {
         id: connectionId,
         from_node: fromNodeId,
         to_node: toNodeId,
-        link: updatedLink
+        link_id: updatedLink.meta.id // Reference only, not embedded
       }
 
       // Update nodes to include this connection
@@ -148,17 +186,31 @@ export const useGraphManager = () => {
     return graphState.nodes.find(node => node.id === nodeId) || null
   }, [graphState.nodes])
 
-  // Update a link
+  // Update a link's properties (links are the single source of truth)
   const updateLink = useCallback((linkId: string, updates: Partial<Link>) => {
     setGraphState(prev => ({
       ...prev,
-      links: prev.links.map(link => 
-        link.id === linkId ? { ...link, ...updates } : link
-      )
+      links: prev.links.map(link => {
+        if (link.meta.id === linkId) {
+          // Handle meta updates separately to preserve structure
+          if (updates.meta) {
+            return { 
+              ...link, 
+              ...updates,
+              meta: { ...link.meta, ...updates.meta }
+            }
+          }
+          return { 
+            ...link, 
+            ...updates
+          }
+        }
+        return link
+      })
     }))
   }, [])
 
-  // Update node position and all connected link endpoints
+  // Update node position and all connected link endpoints (including recalculating length)
   const updateNodePosition = useCallback((nodeId: string, newX: number, newY: number) => {
     setGraphState(prev => {
       // Update the node position
@@ -171,24 +223,40 @@ export const useGraphManager = () => {
         conn.from_node === nodeId || conn.to_node === nodeId
       )
       
-      // Update link endpoints for all connected links
+      // Update link endpoints and recalculate length for all connected links
       const updatedLinks = prev.links.map(link => {
-        const connection = connectionsInvolving.find(conn => conn.link.id === link.id)
+        const connection = connectionsInvolving.find(conn => conn.link_id === link.meta.id)
         if (!connection) return link
         
-        let updates: Partial<Link> = {}
+        // Start with current link values from meta
+        let newStartPoint = link.meta.start_point
+        let newEndPoint = link.meta.end_point
         
         // Update start_point if this node is the from_node
         if (connection.from_node === nodeId) {
-          updates.start_point = [newX, newY] as [number, number]
+          newStartPoint = [newX, newY] as [number, number]
         }
         
         // Update end_point if this node is the to_node  
         if (connection.to_node === nodeId) {
-          updates.end_point = [newX, newY] as [number, number]
+          newEndPoint = [newX, newY] as [number, number]
         }
         
-        return { ...link, ...updates }
+        // Recalculate length from the new start and end points
+        let newLength = link.length
+        if (newStartPoint && newEndPoint) {
+          newLength = calculateLength(newStartPoint, newEndPoint)
+        }
+        
+        return { 
+          ...link, 
+          length: newLength,
+          meta: {
+            ...link.meta,
+            start_point: newStartPoint,
+            end_point: newEndPoint
+          }
+        }
       })
       
       return {
@@ -219,20 +287,42 @@ export const useGraphManager = () => {
   const deleteLink = useCallback((linkId: string) => {
     setGraphState(prev => {
       // Find connections that use this link
-      const connectionsToRemove = prev.connections.filter(conn => conn.link.id === linkId)
+      const connectionsToRemove = prev.connections.filter(conn => conn.link_id === linkId)
       const connectionIdsToRemove = connectionsToRemove.map(conn => conn.id)
       
+      // Collect node IDs from the removed connections to check for orphaned nodes
+      const nodeIdsToCheck = new Set<string>()
+      connectionsToRemove.forEach(conn => {
+        nodeIdsToCheck.add(conn.from_node)
+        nodeIdsToCheck.add(conn.to_node)
+      })
+      
       // Update nodes to remove these connections
-      const updatedNodes = prev.nodes.map(node => ({
+      let updatedNodes = prev.nodes.map(node => ({
         ...node,
         connections: node.connections.filter(connId => !connectionIdsToRemove.includes(connId))
       }))
       
+      // Check each node that was connected to the deleted link
+      // If a node has no remaining connections, delete it
+      const nodeIdsToDelete = new Set<string>()
+      nodeIdsToCheck.forEach(nodeId => {
+        const node = updatedNodes.find(n => n.id === nodeId)
+        if (node && node.connections.length === 0) {
+          nodeIdsToDelete.add(nodeId)
+        }
+      })
+      
+      // Remove orphaned nodes
+      if (nodeIdsToDelete.size > 0) {
+        updatedNodes = updatedNodes.filter(node => !nodeIdsToDelete.has(node.id))
+      }
+      
       return {
         ...prev,
         nodes: updatedNodes,
-        connections: prev.connections.filter(conn => conn.link.id !== linkId),
-        links: prev.links.filter(link => link.id !== linkId)
+        connections: prev.connections.filter(conn => conn.link_id !== linkId),
+        links: prev.links.filter(link => link.meta.id !== linkId)
       }
     })
   }, [])
@@ -245,7 +335,7 @@ export const useGraphManager = () => {
         conn.from_node === nodeId || conn.to_node === nodeId
       )
       const connectionIdsToRemove = connectionsToRemove.map(conn => conn.id)
-      const linkIdsToRemove = connectionsToRemove.map(conn => conn.link.id)
+      const linkIdsToRemove = connectionsToRemove.map(conn => conn.link_id)
       
       // Update remaining nodes to remove these connections
       const updatedNodes = prev.nodes
@@ -261,7 +351,7 @@ export const useGraphManager = () => {
         connections: prev.connections.filter(conn => 
           conn.from_node !== nodeId && conn.to_node !== nodeId
         ),
-        links: prev.links.filter(link => !linkIdsToRemove.includes(link.id))
+        links: prev.links.filter(link => !linkIdsToRemove.includes(link.meta.id))
       }
     })
   }, [])
@@ -285,20 +375,37 @@ export const useGraphManager = () => {
         return conn
       })
       
-      // Update links to use target node position
+      // Update links to use target node position and recalculate length
       const updatedLinks = prev.links.map(link => {
-        const connection = updatedConnections.find(conn => conn.link.id === link.id)
+        const connection = updatedConnections.find(conn => conn.link_id === link.meta.id)
         if (!connection) return link
         
-        let updates: Partial<Link> = {}
-        if (connection.from_node === targetNodeId && link.start_point) {
-          updates.start_point = [targetNode.pos[0], targetNode.pos[1]]
+        // Start with current link values from meta
+        let newStartPoint = link.meta.start_point
+        let newEndPoint = link.meta.end_point
+        
+        if (connection.from_node === targetNodeId && link.meta.start_point) {
+          newStartPoint = [targetNode.pos[0], targetNode.pos[1]] as [number, number]
         }
-        if (connection.to_node === targetNodeId && link.end_point) {
-          updates.end_point = [targetNode.pos[0], targetNode.pos[1]]
+        if (connection.to_node === targetNodeId && link.meta.end_point) {
+          newEndPoint = [targetNode.pos[0], targetNode.pos[1]] as [number, number]
         }
         
-        return { ...link, ...updates }
+        // Recalculate length from the new start and end points
+        let newLength = link.length
+        if (newStartPoint && newEndPoint) {
+          newLength = calculateLength(newStartPoint, newEndPoint)
+        }
+        
+        return { 
+          ...link, 
+          length: newLength,
+          meta: {
+            ...link.meta,
+            start_point: newStartPoint,
+            end_point: newEndPoint
+          }
+        }
       })
       
       // Merge connection IDs and remove the source node
@@ -330,7 +437,7 @@ export const useGraphManager = () => {
     })
   }, [])
 
-  // Get graph structure for backend with all frontend data preserved
+  // Get graph structure for backend - connections are lightweight references
   const getGraphStructure = useCallback(() => {
     return {
       nodes: graphState.nodes.map(node => ({
@@ -339,11 +446,13 @@ export const useGraphManager = () => {
         fixed: node.fixed || false,
         fixed_loc: node.fixed_loc
       })),
+      // Connections are now lightweight - just references
       connections: graphState.connections.map(conn => ({
         from_node: conn.from_node,
         to_node: conn.to_node,
-        link: conn.link
+        link_id: conn.link_id
       })),
+      // Links are the single source of truth
       links: graphState.links
     }
   }, [graphState])
@@ -378,7 +487,7 @@ export const useGraphManager = () => {
       
       // Update has_fixed field and fixed_loc on connected links
       const updatedLinks = prev.links.map(link => {
-        const connection = connectionsInvolving.find(conn => conn.link.id === link.id)
+        const connection = connectionsInvolving.find(conn => conn.link_id === link.meta.id)
         if (!connection) return link
         
         // Check if either connected node is fixed
@@ -420,7 +529,7 @@ export const useGraphManager = () => {
     setGraphState(prev => {
       const updatedLinks = prev.links.map(link => {
         // Find connection for this link
-        const connection = prev.connections.find(conn => conn.link.id === link.id)
+        const connection = prev.connections.find(conn => conn.link_id === link.meta.id)
         if (!connection) return link
         
         // Check if either connected node is fixed
@@ -448,6 +557,8 @@ export const useGraphManager = () => {
     addConnection,
     findConnectionsAt,
     getNode,
+    getLinkById,
+    getLinkForConnection,
     updateLink,
     updateNodePosition,
     deleteLink,
@@ -465,9 +576,10 @@ export const useGraphManager = () => {
 // GraphManager component for visual debugging (optional)
 export const GraphManager: React.FC<{
   graphState: GraphState
+  getLinkForConnection: (conn: GraphConnection) => Link | undefined
   onNodeClick?: (node: GraphNode) => void
   onConnectionClick?: (connection: GraphConnection) => void
-}> = ({ graphState, onNodeClick: _onNodeClick, onConnectionClick: _onConnectionClick }) => {
+}> = ({ graphState, getLinkForConnection, onNodeClick: _onNodeClick, onConnectionClick: _onConnectionClick }) => {
   return (
     <div style={{ padding: '10px', border: '1px solid #ccc', margin: '10px' }}>
       <h4>Graph State Debug</h4>
@@ -485,11 +597,14 @@ export const GraphManager: React.FC<{
       <div>
         <strong>Connections ({graphState.connections.length}):</strong>
         <ul>
-          {graphState.connections.map(conn => (
-            <li key={conn.id}>
-              {conn.from_node} → {conn.to_node} via {conn.link.name}
-            </li>
-          ))}
+          {graphState.connections.map(conn => {
+            const link = getLinkForConnection(conn)
+            return (
+              <li key={conn.id}>
+                {conn.from_node} → {conn.to_node} via {link?.name || 'unknown'}
+              </li>
+            )
+          })}
         </ul>
       </div>
     </div>

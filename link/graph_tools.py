@@ -262,6 +262,15 @@ def solve_graph_links(
         links = [edge_data["link"] for edge_data in [edge_data1, edge_data2, edge_data3]]
         tri_link_sets.append(links)
     
+    # Log all link lengths at the start
+    if verbose >= 1:
+        print("\n=== LINK LENGTHS ===")
+        for edge in link_graph.edges(data=True):
+            node1, node2, edge_data = edge
+            link = edge_data['link']
+            print(f"  {link.name}: length={link.length}, is_driven={link.is_driven}, has_fixed={link.has_fixed}")
+        print("===================\n")
+    
     links = []
     for edge in link_graph.edges(data=True):
         node1, node2, edge_data = edge
@@ -285,7 +294,7 @@ def solve_graph_links(
             err_msg = f"As convention if a node is fixed, its edge must be directed away, however link `{link.name}` is backwards."
             assert node1_data['fixed'], err_msg
             if verbose > 0:
-                print(f"\tlink `{link.name}` is fixed")
+                print(f"\tlink `{link.name}` is fixed (length={link.length})")
             fixed_node_data = node1_data
             # print("\t\t", fixed_node_data)
             fixed_loc = fixed_node_data['fixed_loc']
@@ -295,7 +304,7 @@ def solve_graph_links(
 
             if link.is_driven:
                 if verbose > 0:
-                    print(f"\t\tlink `{link.name}` is driven")
+                    print(f"\t\tlink `{link.name}` is driven (length={link.length})")
                 x = fixed_loc[0] + link.length * np.cos(omega * time)
                 y = fixed_loc[1] + link.length * np.sin(omega * time)
 
@@ -307,7 +316,7 @@ def solve_graph_links(
 
             assert not link.has_fixed, "The nodes are not fixed, but the link is fixed."
             if verbose > 0:
-                print(f"\tlink `{link.name}` is free")
+                print(f"\tlink `{link.name}` is free (length={link.length})")
 
             in_edges_node1 = list(link_graph.in_edges(node1, data=True))
             out_edges_node1 = list(link_graph.out_edges(node1, data=True))
@@ -394,7 +403,9 @@ def solve_graph_links(
 
                 cl = all_constrained_links[0]
                 lc = get_cart_distance(cl.pos1[i], cl.pos2[i])
-                assert np.isclose(lc, cl.length, rtol=rtol), f"No viable solution, {cl.name} {lc} {cl.length}"
+                if not np.isclose(lc, cl.length, rtol=rtol):
+                    error_pct = abs(lc - cl.length) / cl.length * 100
+                    raise ValueError(f"No viable solution for link '{cl.name}': computed length {lc:.3f} differs from expected length {cl.length:.3f} by {error_pct:.1f}%. The linkage geometry may be physically impossible with these link lengths.")
 
             else:
                 free_link_names = [l.name for l in all_free_links]
@@ -437,8 +448,12 @@ def solve_graph_links(
                         if verbose >=4:
                             print('\t\t\tlink 2 calculated length', l2, 'expected length', freelink2.length)
                             print('\t\t\tlink 3 calculated length', l3, 'expected length', freelink3.length)
-                        assert np.isclose(l3, freelink3.length, rtol=rtol), f"No viable solution, {freelink3.name} {l3} vs {freelink3.length}"
-                        assert np.isclose(l2, freelink2.length, rtol=rtol), f"No viable solution, {link.name} {l2} vs {link.length}"
+                        if not np.isclose(l3, freelink3.length, rtol=rtol):
+                            error_pct = abs(l3 - freelink3.length) / freelink3.length * 100
+                            raise ValueError(f"No viable solution for triangle link '{freelink3.name}': computed length {l3:.3f} differs from expected length {freelink3.length:.3f} by {error_pct:.1f}%. Triangle constraints with links [{freelink1.name}, {freelink2.name}, {freelink3.name}] cannot be satisfied - check that link lengths form a valid triangle (each side must be less than sum of other two).")
+                        if not np.isclose(l2, freelink2.length, rtol=rtol):
+                            error_pct = abs(l2 - freelink2.length) / freelink2.length * 100
+                            raise ValueError(f"No viable solution for triangle link '{freelink2.name}': computed length {l2:.3f} differs from expected length {freelink2.length:.3f} by {error_pct:.1f}%. Triangle constraints with links [{freelink1.name}, {freelink2.name}, {freelink3.name}] cannot be satisfied - check that link lengths form a valid triangle.")
 
     fixed_links = [link for link in links if link.has_fixed]
     free_links = [link for link in links if not link.has_fixed]
@@ -521,8 +536,12 @@ def run_graph(
                         fixed_link.fixed_loc,
                                         pos2)
                     free_link_length = get_cart_distance(pos1, pos2)
-                    assert np.isclose(free_link_length, free_link.length, rtol=rtol), "No viable solution"
-                    assert np.isclose(fixed_link_length, fixed_link.length, rtol=rtol), "No viable solution"
+                    if not np.isclose(free_link_length, free_link.length, rtol=rtol):
+                        error_pct = abs(free_link_length - free_link.length) / free_link.length * 100
+                        raise ValueError(f"No viable solution for free link '{free_link.name}': computed length {free_link_length:.3f} differs from expected length {free_link.length:.3f} by {error_pct:.1f}%. The linkage may be over-constrained or the link lengths may be incompatible with the fixed nodes.")
+                    if not np.isclose(fixed_link_length, fixed_link.length, rtol=rtol):
+                        error_pct = abs(fixed_link_length - fixed_link.length) / fixed_link.length * 100
+                        raise ValueError(f"No viable solution for fixed link '{fixed_link.name}': computed length {fixed_link_length:.3f} differs from expected length {fixed_link.length:.3f} by {error_pct:.1f}%. The distance between fixed node at {fixed_link.fixed_loc} and computed position {pos2} doesn't match the link length. Check fixed node positions and link lengths.")
 
                     if verbose > 0:
                         print(f"\tlink coords, pos1:{pos1} pos2:{pos2}")

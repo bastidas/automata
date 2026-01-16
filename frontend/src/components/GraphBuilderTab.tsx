@@ -27,7 +27,13 @@ import {
 } from '@mui/material'
 import DeleteIcon from '@mui/icons-material/Delete'
 import { Link } from '../response_models'
-import { useGraphManager } from './GraphManager'
+import { useGraphManager, calculateLength } from './GraphManager'
+import {
+  createInitialLinkData,
+  constructFrontendLink,
+  createDeleteItem,
+  DeleteItem
+} from './GraphManagerHelpers'
 import PathVisualization from './PathVisualization'
 
 // Seaborn-style "tab10" color palette equivalent
@@ -66,17 +72,11 @@ const GraphBuilderTab: React.FC = () => {
   const pixelsToUnits = (pixels: number) => pixels / PIXELS_PER_UNIT
   const unitsToPixels = (units: number) => units * PIXELS_PER_UNIT
   
-  const calculateLength = (point1: [number, number], point2: [number, number]) => {
-    const dx = point2[0] - point1[0]
-    const dy = point2[1] - point1[1]
-    return Math.sqrt(dx * dx + dy * dy)
-  }
   const [selectedLink, setSelectedLink] = useState<Link | null>(null)
   const [editDialog, setEditDialog] = useState(false)
   const [editForm, setEditForm] = useState({
     // Required fields with defaults
     name: '',
-    length: '1.0',
     n_iterations: 24,
     has_fixed: false,
     // Optional fields with defaults
@@ -91,7 +91,7 @@ const GraphBuilderTab: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'links' | 'nodes'>('links')
   const [deleteDialog, setDeleteDialog] = useState(false)
-  const [itemToDelete, setItemToDelete] = useState<{type: 'link' | 'node', id: string, name: string} | null>(null)
+  const [itemToDelete, setItemToDelete] = useState<DeleteItem | null>(null)
   const [hoveredItem, setHoveredItem] = useState<{type: 'link' | 'node', id: string} | null>(null)
   const [dragging, setDragging] = useState<{nodeId: string, offset: {x: number, y: number}} | null>(null)
   const [justFinishedDragging, setJustFinishedDragging] = useState(false)
@@ -101,6 +101,47 @@ const GraphBuilderTab: React.FC = () => {
   const [pathData, setPathData] = useState<any>(null)
   const [linkCreationMode, setLinkCreationMode] = useState<'idle' | 'waiting-for-second-click'>('idle')
   const [justStartedLinkFromNode, setJustStartedLinkFromNode] = useState(false)
+  
+  // Pylinkage integration state
+  const [pylinkageLoading, setPylinkageLoading] = useState(false)
+  const [pylinkageResult, setPylinkageResult] = useState<any>(null)
+  const [pylinkageDialogOpen, setPylinkageDialogOpen] = useState(false)
+
+  // Unified function to enter link creation mode from a given start point (units)
+  const enterLinkCreationMode = useCallback(
+    (
+      startX: number,
+      startY: number,
+      fromNodeId?: string,
+      initialEndPixel?: { x: number; y: number }
+    ) => {
+      const clickPoint: ClickPoint = { x: startX, y: startY, timestamp: Date.now() }
+      setCurrentClick(clickPoint)
+      setLinkCreationMode('waiting-for-second-click')
+      setError(null)
+
+      // Grey preview line behavior:
+      // - Normally, the preview line is updated in handleMouseMove when `currentClick` is set.
+      // - To provide immediate visual feedback, we also initialize `previewLine` here
+      //   using the current mouse pixel position if provided, else a slight offset
+      //   so the dashed line is visible even before the user moves the mouse.
+      const startPx = { x: unitsToPixels(startX), y: unitsToPixels(startY) }
+      const endPx = initialEndPixel
+        ? initialEndPixel
+        : { x: startPx.x + 16, y: startPx.y } // small offset to make the line visible immediately
+      setPreviewLine({ start: startPx, end: endPx })
+
+      if (fromNodeId) {
+        setStatusMessage(`Creating link from node ${fromNodeId} - click second point`)
+        setJustStartedLinkFromNode(true)
+        setTimeout(() => setJustStartedLinkFromNode(false), 100)
+      } else {
+        setStatusMessage('Creating link - click second point (press Escape to cancel)')
+        setJustStartedLinkFromNode(false)
+      }
+    },
+    []
+  )
 
   // Helper function to get color by default palette
   const getDefaultColor = (index: number): string => {
@@ -118,12 +159,13 @@ const GraphBuilderTab: React.FC = () => {
     if (colorMode === 'zlevel') {
       return getZLevelColor(link.zlevel || 0)
     }
-    return link.color || getDefaultColor(index)
+    return link.meta.color || getDefaultColor(index)
   }
 
   // Get unique z-levels from current links
   const getUniqueZLevels = graphManager?.getUniqueZLevels || (() => [])
   const canvasRef = useRef<HTMLDivElement>(null)
+  const skipCanvasClickRef = useRef(false)
 
   // Add keyboard event handling for escape key
   useEffect(() => {
@@ -238,12 +280,12 @@ const GraphBuilderTab: React.FC = () => {
       )
       const timeHeld = Date.now() - mouseDownOnNode.startTime
       
-      // Debug logging to understand what's happening
-      console.log('MouseMove - distance:', distance, 'timeHeld:', timeHeld)
-      
-      // Only start dragging if moved significantly (8+ units = 48px) AND held long enough (200ms+)
-      // This ensures clicks go to link creation, only deliberate drags trigger drag mode
-      if (distance > 8.0 && timeHeld > 200) {
+      // Only start dragging if:
+      // - mouse moved significantly (8+ units = 48px)
+      // - mouse button is actively held (event.buttons === 1)
+      // - user held for at least 250ms to distinguish from brief clicks
+      // This ensures clicks go to link creation; only deliberate drags trigger drag mode.
+      if (event.buttons === 1 && distance > 8.0 && timeHeld > 250) {
         const node = graphManager.findNodeAt(mouseDownOnNode.startPos.x, mouseDownOnNode.startPos.y)
         if (node && !node.fixed) { // Double-check node is not fixed
           setDragging({
@@ -283,19 +325,19 @@ const GraphBuilderTab: React.FC = () => {
 
     // Check for link hover (simplified - check if close to any link line)
     const hoveredLink = graphManager.graphState.links.find(link => {
-      if (!link.start_point || !link.end_point) return false
+      if (!link.meta.start_point || !link.meta.end_point) return false
       
       // Simple distance to line calculation (all in unit coordinates)
-      const A = y - link.start_point[1]
-      const B = link.start_point[0] - x
-      const C = x * link.start_point[1] - link.start_point[0] * y
-      const distance = Math.abs(A * link.end_point[0] + B * link.end_point[1] + C) / Math.sqrt(A * A + B * B)
+      const A = y - link.meta.start_point[1]
+      const B = link.meta.start_point[0] - x
+      const C = x * link.meta.start_point[1] - link.meta.start_point[0] * y
+      const distance = Math.abs(A * link.meta.end_point[0] + B * link.meta.end_point[1] + C) / Math.sqrt(A * A + B * B)
       
       return distance < 1.7 // ~10px tolerance in unit coordinates (10/6 ≈ 1.7)
     })
 
     if (hoveredLink) {
-      setHoveredItem({ type: 'link', id: hoveredLink.id })
+      setHoveredItem({ type: 'link', id: hoveredLink.meta.id })
     } else {
       setHoveredItem(null)
     }
@@ -367,18 +409,17 @@ const GraphBuilderTab: React.FC = () => {
       const clickedNode = graphManager.findNodeAt(x, y)
       console.log('MouseUp - clickedNode:', clickedNode)
       if (clickedNode && clickedNode.id === mouseDownOnNode.nodeId) {
-        const clickPoint: ClickPoint = { x: clickedNode.pos[0], y: clickedNode.pos[1], timestamp: Date.now() }
-        
         if (!currentClick) {
           // Start a new link from this node
           console.log('MouseUp - Starting link from existing node:', clickedNode.id)
-          setCurrentClick(clickPoint)
-          setLinkCreationMode('waiting-for-second-click')
-          setJustStartedLinkFromNode(true)
-          setError(null)
-          setStatusMessage(`Creating link from node ${clickedNode.id} - click second point`)
-          // Clear the flag after a short delay to allow the event to complete
-          setTimeout(() => setJustStartedLinkFromNode(false), 100)
+          // Ignore the subsequent click event fired after this mouseup to prevent accidental cancellation
+          skipCanvasClickRef.current = true
+          enterLinkCreationMode(
+            clickedNode.pos[0],
+            clickedNode.pos[1],
+            clickedNode.id,
+            { x: pixelX, y: pixelY }
+          )
           // Prevent canvas click from also handling this event
           event.preventDefault()
           event.stopPropagation()
@@ -400,34 +441,17 @@ const GraphBuilderTab: React.FC = () => {
             const linkName = isFirstLink ? 'drive_link' : `link${linkCounter + 1}`
             const defaultColor = getDefaultColor(graphManager.graphState.links.length)
             
-            const newLinkData = {
-              // Required fields
-              name: linkName,
-              length: Math.max(0.1, length), // Minimum length, max 100 per backend
-              n_iterations: 24, // Default to match backend expectation
-              has_fixed: false, // Required field
-              // Optional fields
-              has_constraint: false,
-              is_driven: isFirstLink,
-              flip: false,
-              zlevel: 0 // Will be updated after successful creation
-            }
+            const newLinkData = createInitialLinkData(linkName, length, isFirstLink, 0)
 
             createLink(newLinkData).then(response => {
               if (response && response.status === 'success' && response.link) {
-                const newLink: Link = {
-                  // Backend response fields
-                  ...response.link,
-                  // Ensure required fields have proper values
-                  length: typeof response.link.length === 'number' ? response.link.length : parseFloat(response.link.length) || 1.0,
-                  // Generate ID if not provided by backend
-                  id: response.link.id || `link_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-                  // Frontend specific fields
-                  start_point: startPoint,
-                  end_point: endPoint,
-                  color: defaultColor,
-                  zlevel: response.link.zlevel ?? 0
-                }
+                const newLink = constructFrontendLink(
+                  response.link,
+                  startPoint,
+                  endPoint,
+                  defaultColor,
+                  0
+                )
                 
                 // Add connection between existing nodes with this link
                 graphManager.addConnection(startNode.id, endNode.id, newLink)
@@ -461,6 +485,13 @@ const GraphBuilderTab: React.FC = () => {
   const handleCanvasClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     console.log('CanvasClick - entry conditions:', { dragging, justFinishedDragging, mouseDownOnNode, justStartedLinkFromNode })
     if (!canvasRef.current || dragging) return // Don't create links while dragging
+
+    // Some interactions (e.g., starting a link from a node) should ignore the next click event
+    if (skipCanvasClickRef.current) {
+      skipCanvasClickRef.current = false
+      console.log('CanvasClick - Ignored due to skip flag')
+      return
+    }
     
     // Don't process canvas click if we just started a link from a node
     if (justStartedLinkFromNode) {
@@ -499,10 +530,7 @@ const GraphBuilderTab: React.FC = () => {
     if (!currentClick || linkCreationMode === 'idle') {
       // First click - start a new link
       console.log('CanvasClick - Starting new link at:', clickPoint)
-      setCurrentClick(clickPoint)
-      setLinkCreationMode('waiting-for-second-click')
-      setError(null)
-      setStatusMessage('Creating link - click second point (press Escape to cancel)')
+      enterLinkCreationMode(clickPoint.x, clickPoint.y, undefined, { x: pixelX, y: pixelY })
     } else {
       // Second click - complete the link
       const startPoint: [number, number] = [currentClick.x, currentClick.y]
@@ -557,9 +585,13 @@ const GraphBuilderTab: React.FC = () => {
       // Prioritize start point connections, then end point connections
       const sourceConnections = startConnections.length > 0 ? startConnections : nearbyConnections
       if (sourceConnections.length > 0) {
-        console.log('Inheriting z-level from existing connection:', sourceConnections[0].link.name)
-        // Inherit z-level + 1 from the existing connection
-        inheritedZLevel = (sourceConnections[0].link.zlevel || 0) + 1
+        // Look up the link for this connection
+        const sourceLink = graphManager.getLinkForConnection(sourceConnections[0])
+        if (sourceLink) {
+          console.log('Inheriting z-level from existing connection:', sourceLink.name)
+          // Inherit z-level + 1 from the existing connection
+          inheritedZLevel = (sourceLink.zlevel || 0) + 1
+        }
       }
 
       const length = calculateLength(startPoint, endPoint)
@@ -568,34 +600,17 @@ const GraphBuilderTab: React.FC = () => {
       const linkName = isFirstLink ? 'drive_link' : `link${linkCounter + 1}`
       const defaultColor = getDefaultColor(graphManager.graphState.links.length)
       
-      const newLinkData = {
-        // Required fields
-        name: linkName,
-                  length: Math.max(0.1, Math.min(100, length)), // Clamp to backend limits 0.1-100 units
-        n_iterations: 24, // Default to match backend expectation
-        has_fixed: false, // Required field
-        // Optional fields
-        has_constraint: false,
-        is_driven: isFirstLink,
-        flip: false,
-        zlevel: inheritedZLevel // Use inherited z-level from nearby connection
-      }
+      const newLinkData = createInitialLinkData(linkName, length, isFirstLink, inheritedZLevel)
 
       createLink(newLinkData).then(response => {
         if (response && response.status === 'success' && response.link) {
-          const newLink: Link = {
-            // Backend response fields
-            ...response.link,
-            // Ensure required fields have proper values
-            length: typeof response.link.length === 'number' ? response.link.length : parseFloat(response.link.length) || 1.0,
-            // Generate ID if not provided by backend
-            id: response.link.id || `link_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-            // Frontend specific fields
-            start_point: startPoint,
-            end_point: endPoint,
-            color: defaultColor,
-            zlevel: inheritedZLevel
-          }
+          const newLink = constructFrontendLink(
+            response.link,
+            startPoint,
+            endPoint,
+            defaultColor,
+            inheritedZLevel
+          )
           
           // Ensure every link has exactly two nodes - create nodes if they don't exist
           let finalStartNode = startNode
@@ -632,7 +647,6 @@ const GraphBuilderTab: React.FC = () => {
     setEditForm({
       // Required fields
       name: link.name,
-      length: link.length.toString(),
       n_iterations: link.n_iterations,
       has_fixed: link.has_fixed,
       // Optional fields with defaults
@@ -640,25 +654,18 @@ const GraphBuilderTab: React.FC = () => {
       is_driven: link.is_driven ?? false,
       flip: link.flip ?? false,
       zlevel: link.zlevel ?? 0,
-      // Frontend fields
-      color: link.color || '#1976d2'
+      // Frontend fields from meta
+      color: link.meta.color || '#1976d2'
     })
     setEditDialog(true)
   }
 
   const handleSaveLink = async () => {
     if (!selectedLink) return
-    
-    const lengthValue = parseFloat(editForm.length)
-    if (isNaN(lengthValue) || lengthValue <= 0) {
-      setError('Length must be a positive number')
-      return
-    }
 
     try {
-      // Update multiple properties
+      // Update multiple properties (excluding length - it's immutable and set via canvas)
       const updates = [
-        { property: 'length', value: lengthValue },
         { property: 'name', value: editForm.name || null },
         { property: 'has_fixed', value: editForm.has_fixed },
         { property: 'has_constraint', value: editForm.has_constraint },
@@ -668,20 +675,23 @@ const GraphBuilderTab: React.FC = () => {
       ]
 
       for (const update of updates) {
-        const result = await modifyLink(selectedLink.id, update.property, update.value)
+        const result = await modifyLink(selectedLink.meta.id, update.property, update.value)
         if (!result) return
       }
 
-      // Update the link using GraphManager
-      graphManager.updateLink(selectedLink.id, {
-        length: lengthValue,
+      // Update the link using GraphManager (excluding length)
+      // Now we need to update meta separately
+      graphManager.updateLink(selectedLink.meta.id, {
         name: editForm.name || undefined,
         has_fixed: editForm.has_fixed,
         has_constraint: editForm.has_constraint,
         is_driven: editForm.is_driven,
         flip: editForm.flip,
-        color: editForm.color,
-        zlevel: parseInt(editForm.zlevel.toString()) || 0
+        zlevel: parseInt(editForm.zlevel.toString()) || 0,
+        meta: {
+          ...selectedLink.meta,
+          color: editForm.color
+        }
       })
       
       setEditDialog(false)
@@ -707,7 +717,7 @@ const GraphBuilderTab: React.FC = () => {
   }
 
   const handleDeleteClick = (type: 'link' | 'node', id: string, name: string) => {
-    setItemToDelete({ type, id, name })
+    setItemToDelete(createDeleteItem(type, id, name))
     setDeleteDialog(true)
   }
 
@@ -717,6 +727,13 @@ const GraphBuilderTab: React.FC = () => {
     if (itemToDelete.type === 'link') {
       graphManager.deleteLink(itemToDelete.id)
     } else if (itemToDelete.type === 'node') {
+      // Collect all links connected to this node and delete them first
+      const connectedConns = graphManager.graphState.connections.filter(
+        conn => conn.from_node === itemToDelete.id || conn.to_node === itemToDelete.id
+      )
+      const linkIds = connectedConns.map(conn => conn.link_id)
+      linkIds.forEach(linkId => graphManager.deleteLink(linkId))
+      // Finally delete the node itself
       graphManager.deleteNode(itemToDelete.id)
     }
     
@@ -738,7 +755,35 @@ const GraphBuilderTab: React.FC = () => {
       const result = await response.json()
       
       if (result.status === 'error') {
-        throw new Error(result.message)
+        // Extract detailed error information if available
+        let errorMessage = result.message || 'Failed to compute graph'
+        
+        // If there are specific errors or traceback, add them to the console for debugging
+        if (result.errors) {
+          console.error('Graph computation errors:', result.errors)
+          
+          // Look for the most informative error in the traceback
+          if (result.errors.traceback && Array.isArray(result.errors.traceback)) {
+            const relevantErrors = result.errors.traceback.filter(
+              (line: string) => line.includes('ValueError') || line.includes('No viable solution')
+            )
+            if (relevantErrors.length > 0) {
+              // Extract the actual error message (usually after "ValueError: ")
+              const lastError = relevantErrors[relevantErrors.length - 1]
+              const match = lastError.match(/ValueError:\s*(.+)$/)
+              if (match) {
+                errorMessage = match[1].trim()
+              }
+            }
+          }
+          
+          // Also check for computation_error
+          if (result.errors.computation_error && result.errors.computation_error.length > 0) {
+            errorMessage = result.errors.computation_error[0]
+          }
+        }
+        
+        throw new Error(errorMessage)
       }
       
       // Update path data for visualization
@@ -751,7 +796,35 @@ const GraphBuilderTab: React.FC = () => {
       setTimeout(() => setStatusMessage(''), 3000)
       console.log('Graph computation result:', result)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to compute graph')
+      const errorMsg = err instanceof Error ? err.message : 'Failed to compute graph'
+      setError(errorMsg)
+      console.error('Graph computation failed:', errorMsg)
+    }
+  }
+
+  const saveGraph = async () => {
+    try {
+      const graphStructure = graphManager.getGraphStructure()
+
+      const response = await fetch('/api/save-graph', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(graphStructure)
+      })
+      
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const result = await response.json()
+      
+      if (result.status === 'error') {
+        throw new Error(result.message)
+      }
+      
+      setError(null)
+      setStatusMessage(`Graph saved: ${result.filename}`)
+      setTimeout(() => setStatusMessage(''), 3000)
+      console.log('Graph saved:', result)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save graph')
     }
   }
 
@@ -795,16 +868,40 @@ const GraphBuilderTab: React.FC = () => {
         }
         
         // Add links and connections
-        if (links && connections && Array.isArray(links) && Array.isArray(connections)) {
-          connections.forEach(conn => {
-            const link = links.find(l => l.name === conn.link.name)
-            if (link) {
-              // Reconstruct the link with frontend properties
-              const reconstructedLink = {
-                ...link,
-                start_point: link.start_point || [0, 0],
-                end_point: link.end_point || [0, 0],
-                color: link.color || getDefaultColor(0)
+        // Handle both old format (connections with embedded link) and new format (link_id reference)
+        if (links && Array.isArray(links)) {
+          links.forEach((link, index) => {
+            // Find the connection for this link
+            let conn = null
+            if (connections && Array.isArray(connections)) {
+              // Try new format first (link_id)
+              conn = connections.find(c => c.link_id === link.meta?.id)
+              // Fall back to old format (embedded link with name)
+              if (!conn) {
+                conn = connections.find(c => c.link?.name === link.name)
+              }
+            }
+            
+            if (conn) {
+              // Reconstruct the link with proper structure
+              const reconstructedLink: Link = {
+                name: link.name,
+                length: link.length,
+                n_iterations: link.n_iterations ?? 24,
+                has_fixed: link.has_fixed ?? false,
+                target_length: link.target_length ?? null,
+                target_cost_func: link.target_cost_func ?? null,
+                fixed_loc: link.fixed_loc ?? null,
+                has_constraint: link.has_constraint ?? false,
+                is_driven: link.is_driven ?? false,
+                flip: link.flip ?? false,
+                zlevel: link.zlevel ?? 0,
+                meta: link.meta || {
+                  id: link.id || `link_${Date.now()}_${index}`,
+                  start_point: link.start_point || [0, 0],
+                  end_point: link.end_point || [0, 0],
+                  color: link.color || getDefaultColor(index)
+                }
               }
               graphManager.addConnection(conn.from_node, conn.to_node, reconstructedLink)
             }
@@ -825,6 +922,228 @@ const GraphBuilderTab: React.FC = () => {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // PYLINKAGE INTEGRATION FUNCTIONS
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  const convertToPylinkage = async () => {
+    try {
+      setPylinkageLoading(true)
+      setError(null)
+      
+      const graphStructure = graphManager.getGraphStructure()
+      
+      const response = await fetch('/api/convert-to-pylinkage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(graphStructure)
+      })
+      
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const result = await response.json()
+      
+      setPylinkageResult(result)
+      setPylinkageDialogOpen(true)
+      
+      if (result.status === 'success') {
+        setStatusMessage('Pylinkage conversion successful!')
+      } else {
+        setStatusMessage('Pylinkage conversion failed - see details')
+      }
+      setTimeout(() => setStatusMessage(''), 3000)
+      
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to convert to pylinkage'
+      setError(errorMsg)
+      setPylinkageResult({ status: 'error', message: errorMsg })
+      setPylinkageDialogOpen(true)
+    } finally {
+      setPylinkageLoading(false)
+    }
+  }
+
+  const simulateWithPylinkage = async () => {
+    try {
+      setPylinkageLoading(true)
+      setError(null)
+      
+      const graphStructure = graphManager.getGraphStructure()
+      
+      const response = await fetch('/api/simulate-pylinkage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...graphStructure,
+          n_iterations: 24
+        })
+      })
+      
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const result = await response.json()
+      
+      setPylinkageResult(result)
+      setPylinkageDialogOpen(true)
+      
+      if (result.status === 'success' && result.path_data) {
+        setPathData(result.path_data)
+        setStatusMessage(`Pylinkage simulation completed in ${result.execution_time_ms?.toFixed(1) || '?'}ms`)
+      } else {
+        setStatusMessage('Pylinkage simulation failed - see details')
+      }
+      setTimeout(() => setStatusMessage(''), 3000)
+      
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to simulate with pylinkage'
+      setError(errorMsg)
+      setPylinkageResult({ status: 'error', message: errorMsg })
+      setPylinkageDialogOpen(true)
+    } finally {
+      setPylinkageLoading(false)
+    }
+  }
+
+  const compareSolvers = async () => {
+    try {
+      setPylinkageLoading(true)
+      setError(null)
+      
+      const graphStructure = graphManager.getGraphStructure()
+      
+      const response = await fetch('/api/compare-solvers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...graphStructure,
+          n_iterations: 24
+        })
+      })
+      
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const result = await response.json()
+      
+      setPylinkageResult(result)
+      setPylinkageDialogOpen(true)
+      
+      if (result.comparison) {
+        const speedup = result.comparison.speedup_factor?.toFixed(2) || 'N/A'
+        setStatusMessage(`Solver comparison complete - speedup: ${speedup}x`)
+      }
+      setTimeout(() => setStatusMessage(''), 3000)
+      
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to compare solvers'
+      setError(errorMsg)
+      setPylinkageResult({ status: 'error', message: errorMsg })
+      setPylinkageDialogOpen(true)
+    } finally {
+      setPylinkageLoading(false)
+    }
+  }
+
+  const runDemo4Bar = async () => {
+    try {
+      setPylinkageLoading(true)
+      setError(null)
+      
+      const response = await fetch('/api/demo-4bar-pylinkage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ground_length: 30.0,
+          crank_length: 10.0,
+          coupler_length: 25.0,
+          rocker_length: 20.0,
+          crank_anchor: [20.0, 30.0],
+          n_iterations: 24,
+          include_ui_format: true
+        })
+      })
+      
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const result = await response.json()
+      
+      setPylinkageResult(result)
+      setPylinkageDialogOpen(true)
+      
+      if (result.status === 'success' && result.path_data) {
+        setPathData(result.path_data)
+        setStatusMessage(`Demo 4-bar completed in ${result.execution_time_ms?.toFixed(1) || '?'}ms`)
+      } else {
+        setStatusMessage('Demo 4-bar failed - see details')
+      }
+      setTimeout(() => setStatusMessage(''), 3000)
+      
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to run demo 4-bar'
+      setError(errorMsg)
+      setPylinkageResult({ status: 'error', message: errorMsg })
+      setPylinkageDialogOpen(true)
+    } finally {
+      setPylinkageLoading(false)
+    }
+  }
+
+  const loadUiGraphIntoBuilder = (uiGraph: any) => {
+    if (!uiGraph) return
+    
+    // Clear current graph
+    graphManager.clearGraph()
+    
+    const { nodes, links, connections } = uiGraph
+    
+    // Add nodes first
+    if (nodes && Array.isArray(nodes)) {
+      nodes.forEach((node: any) => {
+        graphManager.addNode(node.pos[0], node.pos[1], node.id)
+        if (node.fixed) {
+          graphManager.toggleNodeFixed(node.id, true)
+        }
+      })
+    }
+    
+    // Add links and connections
+    if (links && Array.isArray(links) && connections && Array.isArray(connections)) {
+      links.forEach((link: any, index: number) => {
+        // Find the connection for this link
+        const conn = connections.find((c: any) => c.link_id === link.meta?.id)
+        
+        if (conn) {
+          // Reconstruct the link with proper structure
+          const reconstructedLink: Link = {
+            name: link.name,
+            length: link.length,
+            n_iterations: link.n_iterations ?? 24,
+            has_fixed: link.has_fixed ?? false,
+            target_length: link.target_length ?? null,
+            target_cost_func: link.target_cost_func ?? null,
+            fixed_loc: link.fixed_loc ?? null,
+            has_constraint: link.has_constraint ?? false,
+            is_driven: link.is_driven ?? false,
+            flip: link.flip ?? false,
+            zlevel: link.zlevel ?? 0,
+            meta: link.meta || {
+              id: link.id || `link_${Date.now()}_${index}`,
+              start_point: link.start_point || [0, 0],
+              end_point: link.end_point || [0, 0],
+              color: link.color || getDefaultColor(index)
+            }
+          }
+          graphManager.addConnection(conn.from_node, conn.to_node, reconstructedLink)
+        }
+      })
+    }
+    
+    // Update counters
+    setNodeCounter(nodes?.length || 0)
+    setLinkCounter(links?.length || 0)
+    
+    // Close dialog
+    setPylinkageDialogOpen(false)
+    
+    setStatusMessage('Demo 4-bar loaded into builder!')
+    setTimeout(() => setStatusMessage(''), 3000)
+  }
+
   return (
     <Box sx={{ py: 4 }}>
       <Typography variant="h4" gutterBottom align="center">
@@ -841,12 +1160,58 @@ const GraphBuilderTab: React.FC = () => {
         <Button variant="outlined" onClick={clearCanvas}>
           Clear Canvas
         </Button>
+        <Button variant="contained" onClick={saveGraph} color="primary">
+          Save Graph
+        </Button>
         <Button variant="contained" onClick={computeGraph} color="success">
           Compute Graph
         </Button>
         <Button variant="outlined" onClick={loadLastSavedGraph} color="primary">
           Load Last Saved
         </Button>
+        <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
+        {/* Pylinkage Integration Buttons */}
+        <Button 
+          variant="contained" 
+          onClick={runDemo4Bar}
+          disabled={pylinkageLoading}
+          color="info"
+          size="small"
+          title="Run a demo 4-bar linkage using native pylinkage API"
+        >
+          {pylinkageLoading ? '...' : '🎯 Demo 4-Bar'}
+        </Button>
+        <Button 
+          variant="outlined" 
+          onClick={convertToPylinkage}
+          disabled={pylinkageLoading || graphManager.graphState.links.length === 0}
+          color="secondary"
+          size="small"
+          title="Test conversion to pylinkage format"
+        >
+          {pylinkageLoading ? '...' : '🔄 Test Pylinkage'}
+        </Button>
+        <Button 
+          variant="contained" 
+          onClick={simulateWithPylinkage}
+          disabled={pylinkageLoading || graphManager.graphState.links.length === 0}
+          color="secondary"
+          size="small"
+          title="Run simulation using pylinkage solver"
+        >
+          {pylinkageLoading ? '...' : '⚡ Pylinkage Sim'}
+        </Button>
+        <Button 
+          variant="outlined" 
+          onClick={compareSolvers}
+          disabled={pylinkageLoading || graphManager.graphState.links.length === 0}
+          color="secondary"
+          size="small"
+          title="Compare automata vs pylinkage solvers"
+        >
+          {pylinkageLoading ? '...' : '📊 Compare'}
+        </Button>
+        <Divider orientation="vertical" flexItem sx={{ mx: 1 }} />
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button 
             variant={colorMode === 'default' ? 'contained' : 'outlined'}
@@ -961,32 +1326,6 @@ const GraphBuilderTab: React.FC = () => {
             />
           )}
 
-          {/* Preview line while creating a link */}
-          {previewLine && (
-            <svg
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '100%',
-                pointerEvents: 'none',
-                zIndex: 2
-              }}
-            >
-              <line
-                x1={previewLine.start.x}
-                y1={previewLine.start.y}
-                x2={previewLine.end.x}
-                y2={previewLine.end.y}
-                stroke="#999"
-                strokeWidth="2"
-                strokeDasharray="5,5"
-                opacity="0.6"
-              />
-            </svg>
-          )}
-          
           {/* Render nodes */}
           {graphManager.graphState.nodes.map((node) => {
             const isHovered = hoveredItem?.type === 'node' && hoveredItem.id === node.id
@@ -1017,13 +1356,13 @@ const GraphBuilderTab: React.FC = () => {
           
           {/* Render links with arrows */}
           {graphManager.graphState.links.map((link, index) => {
-            if (!link.start_point || !link.end_point) return null
+            if (!link.meta.start_point || !link.meta.end_point) return null
             
-            const isHovered = hoveredItem?.type === 'link' && hoveredItem.id === link.id
+            const isHovered = hoveredItem?.type === 'link' && hoveredItem.id === link.meta.id
             
             // Convert link points from units to pixels for rendering
-            const startPx = [unitsToPixels(link.start_point[0]), unitsToPixels(link.start_point[1])]
-            const endPx = [unitsToPixels(link.end_point[0]), unitsToPixels(link.end_point[1])]
+            const startPx = [unitsToPixels(link.meta.start_point[0]), unitsToPixels(link.meta.start_point[1])]
+            const endPx = [unitsToPixels(link.meta.end_point[0]), unitsToPixels(link.meta.end_point[1])]
             
             // Calculate arrow direction
             const dx = endPx[0] - startPx[0]
@@ -1084,6 +1423,32 @@ const GraphBuilderTab: React.FC = () => {
               </svg>
             )
           })}
+          
+          {/* Preview line while creating a link - rendered last so it appears on top */}
+          {previewLine && (
+            <svg
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                pointerEvents: 'none',
+                zIndex: 50
+              }}
+            >
+              <line
+                x1={previewLine.start.x}
+                y1={previewLine.start.y}
+                x2={previewLine.end.x}
+                y2={previewLine.end.y}
+                stroke="#999"
+                strokeWidth="2"
+                strokeDasharray="5,5"
+                opacity="0.6"
+              />
+            </svg>
+          )}
         </Paper>
         
         {/* Status Indicator */}
@@ -1174,11 +1539,11 @@ const GraphBuilderTab: React.FC = () => {
             {viewMode === 'links' && (
               <List dense sx={{ maxHeight: 420, overflow: 'auto' }}>
                 {graphManager.graphState.links.map((link, index) => {
-                  const isHovered = hoveredItem?.type === 'link' && hoveredItem.id === link.id
+                  const isHovered = hoveredItem?.type === 'link' && hoveredItem.id === link.meta.id
                   return (
                     <ListItem 
                       key={index}
-                      onMouseEnter={() => setHoveredItem({ type: 'link', id: link.id })}
+                      onMouseEnter={() => setHoveredItem({ type: 'link', id: link.meta.id })}
                       onMouseLeave={() => setHoveredItem(null)}
                       sx={{ 
                         backgroundColor: isHovered ? '#f0f0f0' : (link.is_driven ? '#fff3e0' : 'transparent'),
@@ -1215,7 +1580,7 @@ const GraphBuilderTab: React.FC = () => {
                     />
                     <IconButton 
                       size="small" 
-                      onClick={() => handleDeleteClick('link', link.id, link.name || `Link ${index + 1}`)}
+                      onClick={() => handleDeleteClick('link', link.meta.id, link.name || `Link ${index + 1}`)}
                       sx={{ ml: 0.5, p: 0.25, minWidth: 'auto' }}
                     >
                       <DeleteIcon sx={{ fontSize: '0.9rem' }} />
@@ -1321,21 +1686,41 @@ const GraphBuilderTab: React.FC = () => {
         <DialogTitle>
           Edit Link Properties
           {selectedLink && (
-            <Typography variant="subtitle2" color="text.secondary">
-              Link ID: {selectedLink.id}
+            <Typography variant="subtitle2" component="span" color="text.secondary" sx={{ display: 'block' }}>
+              Link ID: {selectedLink.meta.id}
             </Typography>
           )}
         </DialogTitle>
         <DialogContent>
           <Grid container spacing={3} sx={{ pt: 1 }}>
+            {/* Current State from Canvas */}
+            <Grid item xs={10}>
+              <Typography variant="h6" gutterBottom sx={{ color: '#1976d2', fontWeight: 'bold' }}>
+                Current State (from Canvas)
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+                <Chip 
+                  label={`Length: ${graphManager.graphState.links.find(l => l.meta.id === selectedLink?.meta.id)?.length?.toFixed(2) || selectedLink?.length?.toFixed(2) || 'N/A'}" `} 
+                  variant="filled" 
+                  size="small"
+                  color="info"
+                  sx={{ fontWeight: 'bold' }}
+                />
+              </Box>
+              <Typography variant="caption" sx={{ color: '#666', display: 'block', mb: 1 }}>
+                ℹ️ Length is calculated from the link's node positions. Drag nodes on the canvas to change it.
+              </Typography>
+              <Divider sx={{ mb: 2 }} />
+            </Grid>
+
             {/* Immutable Properties */}
             <Grid item xs={10}>
               <Typography variant="h6" gutterBottom>
                 Immutable Properties
               </Typography>
-              <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+              <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap' }}>
                 <Chip 
-                  label={`ID: ${selectedLink?.id || 'N/A'}`} 
+                  label={`ID: ${selectedLink?.meta.id || 'N/A'}`} 
                   variant="outlined" 
                   size="small"
                 />
@@ -1353,18 +1738,6 @@ const GraphBuilderTab: React.FC = () => {
               <Typography variant="h6" gutterBottom>
                 Editable Properties
               </Typography>
-            </Grid>
-            
-            <Grid item xs={12} sm={3}>
-              <TextField
-                label="Length"
-                type="number"
-                value={editForm.length}
-                onChange={(e) => setEditForm(prev => ({ ...prev, length: e.target.value }))}
-                fullWidth
-                inputProps={{ min: 0.1, step: 0.1 }}
-                helperText="Length of the link in inches"
-              />
             </Grid>
             
             <Grid item xs={12} sm={3}>
@@ -1465,18 +1838,317 @@ const GraphBuilderTab: React.FC = () => {
       </Dialog>
 
       {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialog} onClose={() => setDeleteDialog(false)}>
+      <Dialog
+        open={deleteDialog}
+        onClose={() => setDeleteDialog(false)}
+        PaperProps={{
+          sx: {
+            bgcolor: 'rgba(255,255,255,0.9)',
+            backdropFilter: 'blur(2px)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.25)'
+          }
+        }}
+        slotProps={{
+          backdrop: {
+            sx: {
+              bgcolor: 'rgba(0,0,0,0.2)'
+            }
+          }
+        }}
+      >
         <DialogTitle>Confirm Delete</DialogTitle>
         <DialogContent>
           <DialogContentText>
             Are you sure you want to delete {itemToDelete?.type} "{itemToDelete?.name}"? This action cannot be undone.
           </DialogContentText>
+          {itemToDelete?.type === 'node' && (() => {
+            const connectedConns = graphManager.graphState.connections.filter(
+              conn => conn.from_node === itemToDelete.id || conn.to_node === itemToDelete.id
+            )
+            if (connectedConns.length === 0) return null
+            return (
+              <Box sx={{ mt: 2 }}>
+                <Alert
+                  severity="warning"
+                  sx={{
+                    mb: 1,
+                    bgcolor: 'rgba(255, 193, 7, 0.15)',
+                    color: '#8a6d1f',
+                    border: '1px solid rgba(255, 193, 7, 0.35)',
+                    '& .MuiAlert-icon': { color: '#8a6d1f' }
+                  }}
+                >
+                  This node is connected to {connectedConns.length} link(s). Deleting it will also remove these links:
+                </Alert>
+                <List dense>
+                  {connectedConns.map(conn => {
+                    const link = graphManager.getLinkForConnection(conn)
+                    return (
+                      <ListItem key={conn.id} sx={{ py: 0.25 }}>
+                        <ListItemText
+                          primary={link?.name || conn.link_id}
+                          secondary={`${conn.from_node} → ${conn.to_node}`}
+                          primaryTypographyProps={{ fontSize: '0.85rem' }}
+                          secondaryTypographyProps={{ fontSize: '0.75rem' }}
+                        />
+                      </ListItem>
+                    )
+                  })}
+                </List>
+              </Box>
+            )
+          })()}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDeleteDialog(false)}>Cancel</Button>
           <Button onClick={confirmDelete} color="error" variant="contained">
             Delete
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Pylinkage Results Dialog */}
+      <Dialog
+        open={pylinkageDialogOpen}
+        onClose={() => setPylinkageDialogOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle sx={{ 
+          bgcolor: pylinkageResult?.status === 'success' ? '#e8f5e9' : '#ffebee',
+          borderBottom: '1px solid #ddd'
+        }}>
+          {pylinkageResult?.status === 'success' ? '✓ ' : '✗ '}
+          Pylinkage {pylinkageResult?.comparison ? 'Comparison' : pylinkageResult?.path_data ? 'Simulation' : 'Conversion'} Results
+        </DialogTitle>
+        <DialogContent sx={{ mt: 2 }}>
+          {pylinkageResult && (
+            <Box>
+              {/* Status */}
+              <Alert 
+                severity={pylinkageResult.status === 'success' ? 'success' : 'error'}
+                sx={{ mb: 2 }}
+              >
+                {pylinkageResult.message || (pylinkageResult.status === 'success' ? 'Operation completed successfully' : 'Operation failed')}
+              </Alert>
+
+              {/* Conversion Stats */}
+              {pylinkageResult.conversion_result?.stats && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" gutterBottom>Conversion Statistics:</Typography>
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                    {Object.entries(pylinkageResult.conversion_result.stats).map(([key, value]) => (
+                      <Chip 
+                        key={key} 
+                        label={`${key.replace(/_/g, ' ')}: ${value}`}
+                        size="small"
+                        variant="outlined"
+                      />
+                    ))}
+                  </Box>
+                </Box>
+              )}
+
+              {/* Simulation Stats */}
+              {pylinkageResult.execution_time_ms !== undefined && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" gutterBottom>Simulation Performance:</Typography>
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                    <Chip 
+                      label={`Execution: ${pylinkageResult.execution_time_ms?.toFixed(2)}ms`}
+                      size="small"
+                      color="primary"
+                    />
+                    <Chip 
+                      label={`Solver: ${pylinkageResult.solver || 'pylinkage'}`}
+                      size="small"
+                      variant="outlined"
+                    />
+                    <Chip 
+                      label={`Iterations: ${pylinkageResult.n_iterations || 24}`}
+                      size="small"
+                      variant="outlined"
+                    />
+                  </Box>
+                </Box>
+              )}
+
+              {/* Comparison Results */}
+              {pylinkageResult.comparison && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" gutterBottom>Solver Comparison:</Typography>
+                  <Grid container spacing={2}>
+                    <Grid item xs={6}>
+                      <Card variant="outlined">
+                        <CardContent sx={{ py: 1 }}>
+                          <Typography variant="caption" color="text.secondary">Automata Solver</Typography>
+                          <Typography variant="h6">
+                            {pylinkageResult.automata_result?.success ? '✓' : '✗'} {pylinkageResult.automata_result?.time_ms?.toFixed(2) || 'N/A'}ms
+                          </Typography>
+                          {pylinkageResult.automata_result?.error && (
+                            <Typography variant="caption" color="error">
+                              {String(pylinkageResult.automata_result.error).substring(0, 100)}
+                            </Typography>
+                          )}
+                        </CardContent>
+                      </Card>
+                    </Grid>
+                    <Grid item xs={6}>
+                      <Card variant="outlined">
+                        <CardContent sx={{ py: 1 }}>
+                          <Typography variant="caption" color="text.secondary">Pylinkage Solver</Typography>
+                          <Typography variant="h6">
+                            {pylinkageResult.pylinkage_result?.success ? '✓' : '✗'} {pylinkageResult.pylinkage_result?.time_ms?.toFixed(2) || 'N/A'}ms
+                          </Typography>
+                          {pylinkageResult.pylinkage_result?.error && (
+                            <Typography variant="caption" color="error">
+                              {String(pylinkageResult.pylinkage_result.error).substring(0, 100)}
+                            </Typography>
+                          )}
+                        </CardContent>
+                      </Card>
+                    </Grid>
+                  </Grid>
+                  {pylinkageResult.comparison.speedup_factor && (
+                    <Box sx={{ mt: 2, textAlign: 'center' }}>
+                      <Chip 
+                        label={`Speedup: ${pylinkageResult.comparison.speedup_factor?.toFixed(2)}x`}
+                        color={pylinkageResult.comparison.speedup_factor > 1 ? 'success' : 'warning'}
+                      />
+                      {pylinkageResult.comparison.max_position_error !== undefined && (
+                        <Chip 
+                          label={`Max Error: ${pylinkageResult.comparison.max_position_error?.toFixed(4)}`}
+                          sx={{ ml: 1 }}
+                          variant="outlined"
+                        />
+                      )}
+                    </Box>
+                  )}
+                </Box>
+              )}
+
+              {/* 4-Bar Metadata (from demo) */}
+              {pylinkageResult.metadata && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" gutterBottom color="primary">
+                    Pylinkage Structure Explanation:
+                  </Typography>
+                  <Alert severity="info" sx={{ mb: 1 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1 }}>
+                      Key Insight: A 4-bar in pylinkage uses only 2 joints!
+                    </Typography>
+                    <Typography variant="body2">
+                      • <strong>Crank</strong>: Rotating driver (angle + distance from ground)
+                    </Typography>
+                    <Typography variant="body2">
+                      • <strong>Revolute</strong>: The coupler-rocker <em>connection point</em>, not a link!
+                    </Typography>
+                    <Typography variant="body2" sx={{ mt: 1, fontStyle: 'italic' }}>
+                      Revolute.distance0 = coupler length, Revolute.distance1 = rocker length
+                    </Typography>
+                  </Alert>
+                  
+                  {pylinkageResult.metadata.parameters && (
+                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
+                      {Object.entries(pylinkageResult.metadata.parameters).map(([key, value]) => (
+                        <Chip 
+                          key={key} 
+                          label={`${key}: ${Array.isArray(value) ? `[${value.join(', ')}]` : value}`}
+                          size="small"
+                          variant="outlined"
+                        />
+                      ))}
+                    </Box>
+                  )}
+                  
+                  {pylinkageResult.metadata.joints && (
+                    <Box sx={{ bgcolor: '#f5f5f5', p: 1, borderRadius: 1, fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                      <Typography variant="caption" sx={{ fontWeight: 'bold' }}>Joint Structure:</Typography>
+                      {Object.entries(pylinkageResult.metadata.joints).map(([name, joint]: [string, any]) => (
+                        <Box key={name} sx={{ ml: 1 }}>
+                          <strong>{name}</strong> ({joint.type}): {joint.represents}
+                          {joint.length && <span> | length={joint.length}</span>}
+                          {joint.distance0 && <span> | dist0={joint.distance0}</span>}
+                          {joint.distance1 && <span> | dist1={joint.distance1}</span>}
+                        </Box>
+                      ))}
+                    </Box>
+                  )}
+                </Box>
+              )}
+
+              {/* Warnings */}
+              {(pylinkageResult.conversion_result?.warnings?.length > 0 || pylinkageResult.conversion_warnings?.length > 0) && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" gutterBottom color="warning.main">Warnings:</Typography>
+                  <List dense>
+                    {(pylinkageResult.conversion_result?.warnings || pylinkageResult.conversion_warnings || []).map((warning: string, i: number) => (
+                      <ListItem key={i} sx={{ py: 0 }}>
+                        <ListItemText 
+                          primary={`⚠️ ${warning}`}
+                          primaryTypographyProps={{ fontSize: '0.85rem', color: 'warning.main' }}
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
+                </Box>
+              )}
+
+              {/* Errors */}
+              {(pylinkageResult.conversion_result?.errors?.length > 0 || pylinkageResult.errors) && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" gutterBottom color="error">Errors:</Typography>
+                  <List dense>
+                    {(pylinkageResult.conversion_result?.errors || 
+                      (Array.isArray(pylinkageResult.errors) ? pylinkageResult.errors : [pylinkageResult.errors]) || 
+                      []).map((error: string, i: number) => (
+                      <ListItem key={i} sx={{ py: 0 }}>
+                        <ListItemText 
+                          primary={`❌ ${error}`}
+                          primaryTypographyProps={{ fontSize: '0.85rem', color: 'error' }}
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
+                </Box>
+              )}
+
+              {/* Joint Mapping */}
+              {pylinkageResult.conversion_result?.joint_mapping && Object.keys(pylinkageResult.conversion_result.joint_mapping).length > 0 && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" gutterBottom>Joint Mapping:</Typography>
+                  <Box sx={{ 
+                    maxHeight: 150, 
+                    overflow: 'auto', 
+                    bgcolor: '#f5f5f5', 
+                    p: 1, 
+                    borderRadius: 1,
+                    fontFamily: 'monospace',
+                    fontSize: '0.75rem'
+                  }}>
+                    {Object.entries(pylinkageResult.conversion_result.joint_mapping).map(([key, value]) => (
+                      <Box key={key}>
+                        {key} → {String(value)}
+                      </Box>
+                    ))}
+                  </Box>
+                </Box>
+              )}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          {pylinkageResult?.ui_graph && (
+            <Button 
+              onClick={() => loadUiGraphIntoBuilder(pylinkageResult.ui_graph)}
+              variant="contained"
+              color="primary"
+              sx={{ mr: 'auto' }}
+            >
+              📥 Load into Builder
+            </Button>
+          )}
+          <Button onClick={() => setPylinkageDialogOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
     </Box>

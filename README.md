@@ -22,7 +22,13 @@ git clone <repository-url>
 cd automata
 ```
 
-### 2. Install in Development Mode
+2a. optionally create a virtualenv
+
+acitvate the env:
+```
+ pyenv activate automata
+ ```
+### 2b. Install in Development Mode
 
 ```bash
 pip install -e .

@@ -47,14 +47,18 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
   const [currentFrame, setCurrentFrame] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
   const [showHistory, setShowHistory] = useState(true)
-  const [playbackSpeed, setPlaybackSpeed] = useState(50) // ms per frame
+  const [showLabels, setShowLabels] = useState(true)
+  // Slider position: 70 (left) = 500ms, 500 (right) = 70ms
+  // Transform: actualSpeed = 570 - sliderPosition
+  const [sliderPosition, setSliderPosition] = useState(440) // 570 - 440 = 130ms default
+  const playbackSpeed = 570 - sliderPosition
   const animationRef = useRef<number>()
 
   useEffect(() => {
     if (pathData) {
       drawFrame(currentFrame)
     }
-  }, [pathData, currentFrame, showHistory])
+  }, [pathData, currentFrame, showHistory, showLabels])
 
   useEffect(() => {
     if (isPlaying && pathData) {
@@ -94,7 +98,7 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
     const transformY = (y: number) => 
       canvasHeight - ((y - bounds.ymin) / (bounds.ymax - bounds.ymin)) * canvasHeight
 
-    // Draw historical trails if enabled
+    // Draw historical trails if enabled (30% bigger: 3 -> 4)
     if (showHistory && history_data[frame]) {
       for (const historyItem of history_data[frame]) {
         for (let i = 0; i < historyItem.positions.length; i++) {
@@ -104,7 +108,7 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
           ctx.globalAlpha = colorInfo.alpha
           ctx.fillStyle = colorInfo.color
           ctx.beginPath()
-          ctx.arc(transformX(pos[0]), transformY(pos[1]), 3, 0, 2 * Math.PI)
+          ctx.arc(transformX(pos[0]), transformY(pos[1]), 4, 0, 2 * Math.PI)
           ctx.fill()
         }
       }
@@ -117,7 +121,9 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
     const rotationFraction = frame / pathData.n_iterations
     const frameColor = getSpectralColor(rotationFraction)
 
-    // Draw current frame links and nodes
+    // First pass: Draw current frame links and nodes (30% bigger: lines 3->4, 2->3; nodes 4->5)
+    const labelPositions: Array<{name: string, x: number, y: number}> = []
+    
     for (const link of links) {
       if (frame < link.pos1.length && frame < link.pos2.length) {
         const pos1 = link.pos1[frame]
@@ -130,7 +136,7 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
 
         // Draw link line
         ctx.strokeStyle = frameColor
-        ctx.lineWidth = link.is_driven ? 3 : 2
+        ctx.lineWidth = link.is_driven ? 4 : 3
         ctx.beginPath()
         ctx.moveTo(x1, y1)
         ctx.lineTo(x2, y2)
@@ -141,22 +147,30 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
         
         // pos1 node
         ctx.beginPath()
-        ctx.arc(x1, y1, 4, 0, 2 * Math.PI)
+        ctx.arc(x1, y1, 5, 0, 2 * Math.PI)
         ctx.fill()
         
         // pos2 node
         ctx.beginPath()
-        ctx.arc(x2, y2, 4, 0, 2 * Math.PI)
+        ctx.arc(x2, y2, 5, 0, 2 * Math.PI)
         ctx.fill()
 
-        // Add link name labels
-        const midX = (x1 + x2) / 2
-        const midY = (y1 + y2) / 2
-        
-        ctx.fillStyle = '#333'
-        ctx.font = '10px Arial'
-        ctx.textAlign = 'center'
-        ctx.fillText(link.name, midX, midY - 5)
+        // Store label position for second pass
+        if (showLabels) {
+          const midX = (x1 + x2) / 2
+          const midY = (y1 + y2) / 2
+          labelPositions.push({ name: link.name, x: midX, y: midY })
+        }
+      }
+    }
+    
+    // Second pass: Draw labels on top of all lines
+    if (showLabels) {
+      ctx.fillStyle = '#333'
+      ctx.font = '11px Arial'
+      ctx.textAlign = 'center'
+      for (const label of labelPositions) {
+        ctx.fillText(label.name, label.x, label.y - 5)
       }
     }
 
@@ -201,6 +215,8 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
   }
 
   const handleFrameChange = (_: Event, value: number | number[]) => {
+    // Pause playback when manually scrubbing to prevent jumping
+    setIsPlaying(false)
     if (typeof value === 'number') {
       setCurrentFrame(value)
     }
@@ -236,7 +252,8 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
               borderRadius: '4px',
               backgroundColor: '#fff',
               display: 'block',
-              margin: '0 auto'
+              margin: '0 auto',
+              imageRendering: 'crisp-edges'
             }}
           />
         </Box>
@@ -258,20 +275,88 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
               onClick={handleStop}
               startIcon={<StopIcon />}
             >
-              Stop
+              Reset
             </Button>
           </Grid>
 
+          {/* Circular Frame Dial */}
+          <Grid item>
+            <Box sx={{ position: 'relative', width: 80, height: 80 }}>
+              <svg width="80" height="80" viewBox="0 0 80 80">
+                {/* Outer circle */}
+                <circle cx="40" cy="40" r="35" fill="none" stroke="#ddd" strokeWidth="2" />
+                
+                {/* Tick marks for each frame */}
+                {Array.from({ length: pathData.n_iterations }, (_, i) => {
+                  const angle = (i / pathData.n_iterations) * 2 * Math.PI - Math.PI / 2
+                  const innerR = 28
+                  const outerR = 34
+                  const x1 = 40 + innerR * Math.cos(angle)
+                  const y1 = 40 + innerR * Math.sin(angle)
+                  const x2 = 40 + outerR * Math.cos(angle)
+                  const y2 = 40 + outerR * Math.sin(angle)
+                  return (
+                    <line
+                      key={i}
+                      x1={x1}
+                      y1={y1}
+                      x2={x2}
+                      y2={y2}
+                      stroke={i === currentFrame ? getSpectralColor(i / pathData.n_iterations) : '#999'}
+                      strokeWidth={i === currentFrame ? 3 : 1}
+                    />
+                  )
+                })}
+                
+                {/* Pointer/hand */}
+                {(() => {
+                  const angle = (currentFrame / pathData.n_iterations) * 2 * Math.PI - Math.PI / 2
+                  const pointerLength = 24
+                  const x = 40 + pointerLength * Math.cos(angle)
+                  const y = 40 + pointerLength * Math.sin(angle)
+                  const frameColor = getSpectralColor(currentFrame / pathData.n_iterations)
+                  return (
+                    <>
+                      <line
+                        x1="40"
+                        y1="40"
+                        x2={x}
+                        y2={y}
+                        stroke={frameColor}
+                        strokeWidth="3"
+                        strokeLinecap="round"
+                      />
+                      <circle cx="40" cy="40" r="4" fill={frameColor} />
+                      <circle cx={x} cy={y} r="3" fill={frameColor} />
+                    </>
+                  )
+                })()}
+                
+                {/* Frame number in center */}
+                <text
+                  x="40"
+                  y="58"
+                  textAnchor="middle"
+                  fontSize="10"
+                  fill="#666"
+                >
+                  {currentFrame + 1}/{pathData.n_iterations}
+                </text>
+              </svg>
+            </Box>
+          </Grid>
+
           <Grid item xs>
-            <Typography gutterBottom>Frame</Typography>
+            <Typography gutterBottom>Frame ({currentFrame + 1}/{pathData.n_iterations})</Typography>
             <Slider
               value={currentFrame}
               onChange={handleFrameChange}
               min={0}
               max={pathData.n_iterations - 1}
               step={1}
-              marks
+              marks={Array.from({ length: pathData.n_iterations }, (_, i) => ({ value: i }))}
               valueLabelDisplay="auto"
+              valueLabelFormat={(v) => v + 1}
             />
           </Grid>
         </Grid>
@@ -289,15 +374,28 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
             />
           </Grid>
           
+          <Grid item>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={showLabels}
+                  onChange={(e) => setShowLabels(e.target.checked)}
+                />
+              }
+              label="Show Link Labels"
+            />
+          </Grid>
+          
           <Grid item xs>
             <Typography gutterBottom>Playback Speed (ms/frame)</Typography>
             <Slider
-              value={playbackSpeed}
-              onChange={(_, value) => setPlaybackSpeed(value as number)}
-              min={10}
-              max={200}
+              value={sliderPosition}
+              onChange={(_, value) => setSliderPosition(value as number)}
+              min={70}
+              max={500}
               step={10}
               valueLabelDisplay="auto"
+              valueLabelFormat={(v) => 570 - v}
             />
           </Grid>
         </Grid>

@@ -26,6 +26,53 @@ def get_status():
         "message": "Acinonyx backend is running successfully"
     }
 
+@app.post("/save-graph")
+def save_graph(graph_data: dict):
+    """Save the current graph state to the graphs directory"""
+    from datetime import datetime
+    import json
+    
+    try:
+        graphs_dir = USER_DIR / "graphs"
+        graphs_dir.mkdir(exist_ok=True)  # Create graphs directory if it doesn't exist
+        
+        time_mark = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_path = graphs_dir / f"graph_{time_mark}.json"
+        
+        # Extract graph components
+        nodes = graph_data.get('nodes', [])
+        connections = graph_data.get('connections', [])
+        links = graph_data.get('links', [])
+        
+        # Prepare data for saving (preserve all frontend data)
+        save_data = {
+            "nodes": nodes,
+            "connections": connections,
+            "links": links,
+            "saved_at": time_mark
+        }
+        
+        with open(save_path, 'w') as f:
+            json.dump(save_data, f, indent=2)
+        
+        print(f"Graph saved to: {save_path}")
+        
+        return {
+            "status": "success",
+            "message": f"Graph saved successfully",
+            "filename": save_path.name,
+            "path": str(save_path),
+            "nodes_count": len(nodes),
+            "connections_count": len(connections),
+            "links_count": len(links)
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to save graph: {str(e)}"
+        }
+
 @app.get("/load-last-saved-graph")
 def load_last_saved_graph():
     """Load the most recently saved graph from the graphs directory"""
@@ -302,7 +349,6 @@ def extract_path_visualization_data(link_objects, n_iterations):
 def compute_graph(graph_data: dict):
     """Compute the mechanical linkage graph following the make_3link pattern"""
     
-    # Save the graph data at the very start
     from datetime import datetime
     import json
     
@@ -310,13 +356,6 @@ def compute_graph(graph_data: dict):
     graphs_dir = USER_DIR / "graphs"
     graphs_dir.mkdir(exist_ok=True)  # Create graphs directory if it doesn't exist
     save_path = graphs_dir / f"graph_{time_mark}.json"
-    
-    try:
-        with open(save_path, "w") as f:
-            json.dump(graph_data, f, indent=2)
-        print(f"Graph data saved to: {save_path}")
-    except Exception as e:
-        print(f"Warning: Failed to save graph data: {e}")
 
     try:
         # Import here to avoid circular imports
@@ -337,8 +376,9 @@ def compute_graph(graph_data: dict):
         
         for i, link_dict in enumerate(links):
             try:
-                # Filter out frontend-specific fields and pos arrays that might be invalid
-                excluded_fields = ['start_point', 'end_point', 'color', 'id', 'pos1', 'pos2']
+                # Filter out frontend-specific fields, meta, and pos arrays that might be invalid
+                # The new format has frontend-only fields in 'meta' sub-object
+                excluded_fields = ['start_point', 'end_point', 'color', 'id', 'pos1', 'pos2', 'meta']
                 link_data = {k: v for k, v in link_dict.items() if k not in excluded_fields}
                 
                 # Remove any pos1/pos2 that might have slipped through with dict values
@@ -420,19 +460,22 @@ def compute_graph(graph_data: dict):
                 print(f"  ✗ {error_msg}")
         
         # Step 3: Validate connections structure
+        # Support both new format (link_id) and old format (embedded link object)
         connection_errors = []
         for i, conn in enumerate(connections):
             try:
                 from_node = conn.get('from_node')
-                to_node = conn.get('to_node') 
-                link_ref = conn.get('link')
+                to_node = conn.get('to_node')
+                # Support both new format (link_id) and old format (embedded link)
+                link_id = conn.get('link_id')
+                link_ref = conn.get('link')  # Old format fallback
                 
                 if not from_node:
                     connection_errors.append(f"Connection {i+1}: missing 'from_node'")
                 if not to_node:
                     connection_errors.append(f"Connection {i+1}: missing 'to_node'")
-                if not link_ref:
-                    connection_errors.append(f"Connection {i+1}: missing 'link'")
+                if not link_id and not link_ref:
+                    connection_errors.append(f"Connection {i+1}: missing 'link_id' or 'link'")
                     
                 # Check if referenced nodes exist
                 node_names = [node.name for node in node_objects]
@@ -467,16 +510,37 @@ def compute_graph(graph_data: dict):
             }
         
         # Step 4: Create connections using the proper Link objects
-        # We need to map the connection links to the actual Link objects we created
+        # Support both new format (link_id) and old format (embedded link)
+        # Build a lookup map for links by their meta.id and name
+        link_by_id = {}
+        link_by_name = {}
+        for idx, link_obj in enumerate(link_objects):
+            link_by_name[link_obj.name] = link_obj
+            # Get the id from the original link_dict's meta field or id field
+            link_dict = links[idx]
+            link_id = None
+            if 'meta' in link_dict and isinstance(link_dict['meta'], dict):
+                link_id = link_dict['meta'].get('id')
+            if not link_id:
+                link_id = link_dict.get('id')
+            if link_id:
+                link_by_id[link_id] = link_obj
+        
         processed_connections = []
         for conn in connections:
-            # Find the matching link object by name
-            link_name = conn.get('link', {}).get('name')
             matching_link = None
-            for link_obj in link_objects:
-                if link_obj.name == link_name:
-                    matching_link = link_obj
-                    break
+            
+            # Try new format first (link_id)
+            link_id = conn.get('link_id')
+            if link_id and link_id in link_by_id:
+                matching_link = link_by_id[link_id]
+            else:
+                # Fall back to old format (embedded link with name)
+                link_ref = conn.get('link')
+                if link_ref:
+                    link_name = link_ref.get('name') if isinstance(link_ref, dict) else None
+                    if link_name and link_name in link_by_name:
+                        matching_link = link_by_name[link_name]
             
             if matching_link:
                 processed_connections.append({
@@ -485,7 +549,7 @@ def compute_graph(graph_data: dict):
                     'link': matching_link
                 })
             else:
-                print(f"Warning: Could not find link object for connection with link name '{link_name}'")
+                print(f"Warning: Could not find link object for connection: {conn}")
         
         # Step 5: Call make_graph_simple with n_iterations = 24 (like make_3link)
         print(f"Calling make_graph_simple with {len(node_objects)} nodes, {len(link_objects)} links, {len(processed_connections)} connections")
@@ -539,6 +603,61 @@ def compute_graph(graph_data: dict):
 
         # Extract path visualization data
         path_data = extract_path_visualization_data(link_objects, n_iterations)
+        
+        # Save the computed graph data after successful computation
+        # Use new format: connections are lightweight (link_id only), links have meta field
+        def get_link_meta(link_dict):
+            """Extract meta from new format or construct from old format"""
+            if 'meta' in link_dict and isinstance(link_dict['meta'], dict):
+                return link_dict['meta']
+            # Old format - construct meta from flat fields
+            return {
+                "id": link_dict.get("id"),
+                "start_point": link_dict.get("start_point"),
+                "end_point": link_dict.get("end_point"),
+                "color": link_dict.get("color")
+            }
+        
+        computed_graph_data = {
+            "nodes": nodes,  # Save original node definitions
+            # Connections are now lightweight - just references
+            "connections": [
+                {
+                    "from_node": conn.get('from_node'),
+                    "to_node": conn.get('to_node'),
+                    "link_id": get_link_meta(links[i]).get('id') if i < len(links) else None
+                }
+                for i, conn in enumerate(connections)
+            ],
+            # Links with new structure (meta sub-object for frontend fields)
+            "links": [
+                {
+                    "name": link.name,
+                    "length": link.length,
+                    "target_length": link.target_length,
+                    "target_cost_func": link.target_cost_func,
+                    "n_iterations": link.n_iterations,
+                    "fixed_loc": list(link.fixed_loc) if link.fixed_loc else None,
+                    "has_fixed": link.has_fixed,
+                    "has_constraint": link.has_constraint,
+                    "path": None,  # Don't serialize numpy path array
+                    "is_driven": link.is_driven,
+                    "flip": link.flip,
+                    "zlevel": link.zlevel,
+                    # Frontend-only fields in meta sub-object
+                    "meta": get_link_meta(link_dict)
+                }
+                for link, link_dict in zip(link_objects, links)
+            ],
+            "saved_at": time_mark
+        }
+        
+        try:
+            with open(save_path, "w") as f:
+                json.dump(computed_graph_data, f, indent=2)
+            print(f"Computed graph data saved to: {save_path}")
+        except Exception as e:
+            print(f"Warning: Failed to save computed graph data: {e}")
 
         return {
             "status": "success", 
@@ -553,7 +672,8 @@ def compute_graph(graph_data: dict):
                 "nodes": len(node_objects),
                 "links": len(link_objects)
             },
-            "path_data": path_data
+            "path_data": path_data,
+            "saved_file": str(save_path)
         }
         
     except Exception as e:
@@ -567,4 +687,562 @@ def compute_graph(graph_data: dict):
                 "computation_error": [str(e)],
                 "traceback": traceback.format_exc().split('\n')
             }
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PYLINKAGE INTEGRATION ROUTES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/demo-4bar-pylinkage")
+def demo_4bar_pylinkage(params: dict = None):
+    """
+    Create and simulate a demo 4-bar linkage using pylinkage directly.
+    
+    This demonstrates proper pylinkage usage without conversion from automata format.
+    A 4-bar linkage in pylinkage uses only 2 joints:
+    - Crank: rotating driver
+    - Revolute: coupler-rocker connection point (with 2 distance constraints)
+    
+    Request body (all optional):
+        {
+            "ground_length": 30.0,
+            "crank_length": 10.0,
+            "coupler_length": 25.0,
+            "rocker_length": 20.0,
+            "crank_anchor": [20.0, 30.0],
+            "n_iterations": 24,
+            "include_ui_format": true  # Include nodes/links/connections for UI
+        }
+    
+    Returns:
+        {
+            "status": "success",
+            "message": str,
+            "metadata": {...},  # Linkage parameters and structure explanation
+            "path_data": {...},  # Visualization data
+            "ui_graph": {...}    # Optional: nodes, links, connections for UI
+        }
+    """
+    from link.pylinkage_bridge import simulate_demo_4bar, demo_4bar_to_ui_format
+    import traceback
+    
+    try:
+        # Use provided params or defaults
+        if params is None:
+            params = {}
+        
+        ground_length = params.get('ground_length', 30.0)
+        crank_length = params.get('crank_length', 10.0)
+        coupler_length = params.get('coupler_length', 25.0)
+        rocker_length = params.get('rocker_length', 20.0)
+        crank_anchor = tuple(params.get('crank_anchor', [20.0, 30.0]))
+        n_iterations = params.get('n_iterations', 24)
+        include_ui_format = params.get('include_ui_format', True)
+        
+        print(f"\n=== DEMO 4-BAR PYLINKAGE ===")
+        print(f"Ground: {ground_length}, Crank: {crank_length}, Coupler: {coupler_length}, Rocker: {rocker_length}")
+        
+        result = simulate_demo_4bar(
+            ground_length=ground_length,
+            crank_length=crank_length,
+            coupler_length=coupler_length,
+            rocker_length=rocker_length,
+            crank_anchor=crank_anchor,
+            n_iterations=n_iterations
+        )
+        
+        # Add UI format if requested
+        if include_ui_format:
+            ui_graph = demo_4bar_to_ui_format(
+                ground_length=ground_length,
+                crank_length=crank_length,
+                coupler_length=coupler_length,
+                rocker_length=rocker_length,
+                crank_anchor=crank_anchor,
+                n_iterations=n_iterations
+            )
+            result["ui_graph"] = ui_graph
+        
+        if result["status"] == "success":
+            print(f"✓ Demo 4-bar completed in {result['execution_time_ms']:.2f}ms")
+            if include_ui_format:
+                print(f"  UI format: {len(ui_graph['nodes'])} nodes, {len(ui_graph['links'])} links")
+        else:
+            print(f"✗ Demo 4-bar failed: {result['message']}")
+        
+        return result
+        
+    except Exception as e:
+        print(f"Error in demo_4bar_pylinkage: {e}")
+        traceback.print_exc()
+        return {
+            "status": "error",
+            "message": f"Demo 4-bar failed: {str(e)}",
+            "traceback": traceback.format_exc().split('\n')
+        }
+
+
+@app.post("/convert-to-pylinkage")
+def convert_to_pylinkage(graph_data: dict):
+    """
+    Convert automata graph to pylinkage format and validate.
+    
+    This endpoint takes the graph data (nodes, links, connections) and converts
+    it to a pylinkage Linkage object, returning a validation report.
+    
+    Request body:
+        {
+            "nodes": [...],
+            "links": [...],
+            "connections": [...]
+        }
+    
+    Returns:
+        {
+            "status": "success" | "error",
+            "message": str,
+            "conversion_result": {
+                "success": bool,
+                "warnings": [...],
+                "errors": [...],
+                "joint_mapping": {...},
+                "stats": {...},
+                "serialized_linkage": {...}  # pylinkage's to_dict() output
+            }
+        }
+    """
+    from link.pylinkage_bridge import convert_to_pylinkage as do_convert
+    from configs.link_models import Link, Node
+    import traceback
+    
+    try:
+        nodes_data = graph_data.get('nodes', [])
+        links_data = graph_data.get('links', [])
+        connections = graph_data.get('connections', [])
+        
+        print("\n=== PYLINKAGE CONVERSION REQUEST ===")
+        print(f"Nodes: {len(nodes_data)}, Links: {len(links_data)}, Connections: {len(connections)}")
+        
+        # Convert raw dicts to model objects
+        node_objects = []
+        for i, node_dict in enumerate(nodes_data):
+            try:
+                n_iterations = node_dict.get('n_iterations', 24)
+                node_data = {
+                    'name': node_dict.get('name', node_dict.get('id', f'node_{i}')),
+                    'n_iterations': n_iterations,
+                    'fixed': node_dict.get('fixed', False)
+                }
+                if 'fixed_loc' in node_dict and node_dict['fixed_loc']:
+                    node_data['fixed_loc'] = tuple(node_dict['fixed_loc'])
+                elif node_data['fixed'] and 'pos' in node_dict:
+                    node_data['fixed_loc'] = tuple(node_dict['pos'])
+                if 'pos' in node_dict and node_dict['pos']:
+                    node_data['init_pos'] = tuple(node_dict['pos'])
+                elif node_data.get('fixed_loc'):
+                    node_data['init_pos'] = node_data['fixed_loc']
+                else:
+                    node_data['init_pos'] = (0.0, 0.0)
+                
+                node_objects.append(Node(**node_data))
+            except Exception as e:
+                print(f"Warning: Failed to create Node from {node_dict}: {e}")
+        
+        link_objects = []
+        for i, link_dict in enumerate(links_data):
+            try:
+                excluded_fields = ['start_point', 'end_point', 'color', 'id', 'pos1', 'pos2', 'meta']
+                link_data = {k: v for k, v in link_dict.items() if k not in excluded_fields}
+                
+                if 'pos1' in link_data and isinstance(link_data['pos1'], dict):
+                    del link_data['pos1']
+                if 'pos2' in link_data and isinstance(link_data['pos2'], dict):
+                    del link_data['pos2']
+                
+                link_objects.append(Link(**link_data))
+            except Exception as e:
+                print(f"Warning: Failed to create Link from {link_dict}: {e}")
+        
+        # Run conversion
+        result = do_convert(node_objects, link_objects, connections)
+        
+        if result.success:
+            print(f"✓ Conversion successful: {result.stats}")
+            return {
+                "status": "success",
+                "message": "Graph converted to pylinkage successfully",
+                "conversion_result": result.to_dict()
+            }
+        else:
+            print(f"✗ Conversion failed: {result.errors}")
+            return {
+                "status": "error",
+                "message": "Conversion failed",
+                "conversion_result": result.to_dict()
+            }
+    
+    except Exception as e:
+        print(f"Error in convert_to_pylinkage: {e}")
+        traceback.print_exc()
+        return {
+            "status": "error",
+            "message": f"Conversion failed: {str(e)}",
+            "traceback": traceback.format_exc().split('\n')
+        }
+
+
+@app.post("/simulate-pylinkage")
+def simulate_pylinkage(graph_data: dict):
+    """
+    Run simulation using pylinkage solver and return trajectory data.
+    
+    This endpoint converts the graph to pylinkage, runs the simulation,
+    and returns the results in the same format as the original solver
+    for compatibility with existing visualization code.
+    
+    Request body:
+        {
+            "nodes": [...],
+            "links": [...], 
+            "connections": [...],
+            "n_iterations": 24  # optional, defaults to 24
+        }
+    
+    Returns:
+        {
+            "status": "success" | "error",
+            "message": str,
+            "solver": "pylinkage",
+            "n_iterations": int,
+            "execution_time_ms": float,
+            "path_data": {
+                "bounds": {...},
+                "links": [...],
+                "history_data": [...],
+                "n_iterations": int
+            }
+        }
+    """
+    from link.pylinkage_bridge import (
+        convert_to_pylinkage as do_convert,
+        simulate_linkage,
+        extract_path_visualization_data
+    )
+    from configs.link_models import Link, Node
+    import traceback
+    
+    try:
+        nodes_data = graph_data.get('nodes', [])
+        links_data = graph_data.get('links', [])
+        connections = graph_data.get('connections', [])
+        n_iterations = graph_data.get('n_iterations', 24)
+        
+        print("\n=== PYLINKAGE SIMULATION REQUEST ===")
+        print(f"Nodes: {len(nodes_data)}, Links: {len(links_data)}, Iterations: {n_iterations}")
+        
+        # Convert raw dicts to model objects (same as convert route)
+        node_objects = []
+        for i, node_dict in enumerate(nodes_data):
+            try:
+                node_n_iter = node_dict.get('n_iterations', n_iterations)
+                node_data = {
+                    'name': node_dict.get('name', node_dict.get('id', f'node_{i}')),
+                    'n_iterations': node_n_iter,
+                    'fixed': node_dict.get('fixed', False)
+                }
+                if 'fixed_loc' in node_dict and node_dict['fixed_loc']:
+                    node_data['fixed_loc'] = tuple(node_dict['fixed_loc'])
+                elif node_data['fixed'] and 'pos' in node_dict:
+                    node_data['fixed_loc'] = tuple(node_dict['pos'])
+                if 'pos' in node_dict and node_dict['pos']:
+                    node_data['init_pos'] = tuple(node_dict['pos'])
+                elif node_data.get('fixed_loc'):
+                    node_data['init_pos'] = node_data['fixed_loc']
+                else:
+                    node_data['init_pos'] = (0.0, 0.0)
+                
+                node_objects.append(Node(**node_data))
+            except Exception as e:
+                print(f"Warning: Failed to create Node from {node_dict}: {e}")
+        
+        link_objects = []
+        for i, link_dict in enumerate(links_data):
+            try:
+                excluded_fields = ['start_point', 'end_point', 'color', 'id', 'pos1', 'pos2', 'meta']
+                link_data = {k: v for k, v in link_dict.items() if k not in excluded_fields}
+                
+                if 'pos1' in link_data and isinstance(link_data['pos1'], dict):
+                    del link_data['pos1']
+                if 'pos2' in link_data and isinstance(link_data['pos2'], dict):
+                    del link_data['pos2']
+                
+                link_objects.append(Link(**link_data))
+            except Exception as e:
+                print(f"Warning: Failed to create Link from {link_dict}: {e}")
+        
+        # Step 1: Convert to pylinkage
+        conversion_result = do_convert(node_objects, link_objects, connections)
+        
+        if not conversion_result.success:
+            return {
+                "status": "error",
+                "message": "Failed to convert graph to pylinkage",
+                "errors": conversion_result.errors,
+                "warnings": conversion_result.warnings
+            }
+        
+        # Step 2: Run simulation
+        sim_result = simulate_linkage(
+            conversion_result.linkage,
+            n_iterations=n_iterations,
+            use_fast=True
+        )
+        
+        if not sim_result.success:
+            return {
+                "status": "error",
+                "message": "Simulation failed",
+                "errors": sim_result.errors
+            }
+        
+        # Step 3: Extract visualization data
+        path_data = extract_path_visualization_data(
+            sim_result.trajectories,
+            link_objects,
+            conversion_result.joint_mapping,
+            n_iterations
+        )
+        
+        print(f"✓ Simulation completed in {sim_result.execution_time_ms:.2f}ms")
+        
+        return {
+            "status": "success",
+            "message": "Simulation completed successfully",
+            "solver": "pylinkage",
+            "n_iterations": n_iterations,
+            "execution_time_ms": sim_result.execution_time_ms,
+            "path_data": path_data,
+            "conversion_stats": conversion_result.stats,
+            "conversion_warnings": conversion_result.warnings
+        }
+    
+    except Exception as e:
+        print(f"Error in simulate_pylinkage: {e}")
+        traceback.print_exc()
+        return {
+            "status": "error",
+            "message": f"Simulation failed: {str(e)}",
+            "traceback": traceback.format_exc().split('\n')
+        }
+
+
+@app.post("/compare-solvers")
+def compare_solvers_route(graph_data: dict):
+    """
+    Run both automata and pylinkage solvers and compare results.
+    
+    This is useful for validating the pylinkage integration produces
+    equivalent results to the original solver.
+    
+    Request body:
+        {
+            "nodes": [...],
+            "links": [...],
+            "connections": [...],
+            "n_iterations": 24
+        }
+    
+    Returns:
+        {
+            "status": "success" | "error",
+            "automata_result": {...},
+            "pylinkage_result": {...},
+            "comparison": {
+                "max_position_error": float,
+                "mean_position_error": float,
+                "automata_time_ms": float,
+                "pylinkage_time_ms": float,
+                "speedup_factor": float
+            }
+        }
+    """
+    import traceback
+    import time
+    import numpy as np
+    from link.pylinkage_bridge import convert_to_pylinkage as do_convert, simulate_linkage
+    from link.graph_tools import make_graph, run_graph
+    from configs.link_models import Link, Node
+    
+    try:
+        nodes_data = graph_data.get('nodes', [])
+        links_data = graph_data.get('links', [])
+        connections_data = graph_data.get('connections', [])
+        n_iterations = graph_data.get('n_iterations', 24)
+        
+        print("\n=== SOLVER COMPARISON REQUEST ===")
+        
+        # Prepare objects (shared between both solvers)
+        node_objects = []
+        for i, node_dict in enumerate(nodes_data):
+            node_n_iter = node_dict.get('n_iterations', n_iterations)
+            node_data = {
+                'name': node_dict.get('name', node_dict.get('id', f'node_{i}')),
+                'n_iterations': node_n_iter,
+                'fixed': node_dict.get('fixed', False)
+            }
+            if 'fixed_loc' in node_dict and node_dict['fixed_loc']:
+                node_data['fixed_loc'] = tuple(node_dict['fixed_loc'])
+            elif node_data['fixed'] and 'pos' in node_dict:
+                node_data['fixed_loc'] = tuple(node_dict['pos'])
+            if 'pos' in node_dict and node_dict['pos']:
+                node_data['init_pos'] = tuple(node_dict['pos'])
+            elif node_data.get('fixed_loc'):
+                node_data['init_pos'] = node_data['fixed_loc']
+            else:
+                node_data['init_pos'] = (0.0, 0.0)
+            node_objects.append(Node(**node_data))
+        
+        link_objects_automata = []
+        link_objects_pylinkage = []
+        for i, link_dict in enumerate(links_data):
+            excluded_fields = ['start_point', 'end_point', 'color', 'id', 'pos1', 'pos2', 'meta']
+            link_data = {k: v for k, v in link_dict.items() if k not in excluded_fields}
+            if 'pos1' in link_data and isinstance(link_data['pos1'], dict):
+                del link_data['pos1']
+            if 'pos2' in link_data and isinstance(link_data['pos2'], dict):
+                del link_data['pos2']
+            # Create separate instances for each solver
+            link_objects_automata.append(Link(**link_data))
+            link_objects_pylinkage.append(Link(**link_data))
+        
+        results = {
+            "automata": {"success": False, "time_ms": 0, "error": None},
+            "pylinkage": {"success": False, "time_ms": 0, "error": None},
+            "comparison": {}
+        }
+        
+        # ─────────────────────────────────────────────────────────────
+        # Run Automata Solver
+        # ─────────────────────────────────────────────────────────────
+        automata_positions = {}
+        try:
+            # Build lookup maps for connections
+            link_by_id = {}
+            link_by_name = {}
+            for idx, link_obj in enumerate(link_objects_automata):
+                link_by_name[link_obj.name] = link_obj
+                link_dict = links_data[idx]
+                link_id = None
+                if 'meta' in link_dict and isinstance(link_dict['meta'], dict):
+                    link_id = link_dict['meta'].get('id')
+                if not link_id:
+                    link_id = link_dict.get('id')
+                if link_id:
+                    link_by_id[link_id] = link_obj
+            
+            processed_connections = []
+            for conn in connections_data:
+                matching_link = None
+                link_id = conn.get('link_id')
+                if link_id and link_id in link_by_id:
+                    matching_link = link_by_id[link_id]
+                else:
+                    link_ref = conn.get('link')
+                    if link_ref:
+                        link_name = link_ref.get('name') if isinstance(link_ref, dict) else None
+                        if link_name and link_name in link_by_name:
+                            matching_link = link_by_name[link_name]
+                if matching_link:
+                    processed_connections.append({
+                        'from_node': conn.get('from_node'),
+                        'to_node': conn.get('to_node'),
+                        'link': matching_link
+                    })
+            
+            start_time = time.perf_counter()
+            graph = make_graph(processed_connections, link_objects_automata, node_objects)
+            times = np.linspace(0, 1, n_iterations)
+            for i, t in enumerate(times):
+                run_graph(i, time=t, omega=2*np.pi, link_graph=graph, verbose=0)
+            
+            results["automata"]["time_ms"] = (time.perf_counter() - start_time) * 1000
+            results["automata"]["success"] = True
+            
+            # Extract positions
+            for link in link_objects_automata:
+                automata_positions[link.name] = {
+                    "pos1": link.pos1.copy(),
+                    "pos2": link.pos2.copy()
+                }
+            
+            print(f"✓ Automata solver completed in {results['automata']['time_ms']:.2f}ms")
+            
+        except Exception as e:
+            results["automata"]["error"] = str(e)
+            print(f"✗ Automata solver failed: {e}")
+        
+        # ─────────────────────────────────────────────────────────────
+        # Run Pylinkage Solver
+        # ─────────────────────────────────────────────────────────────
+        pylinkage_positions = {}
+        try:
+            start_time = time.perf_counter()
+            conversion_result = do_convert(node_objects, link_objects_pylinkage, connections_data)
+            
+            if conversion_result.success:
+                sim_result = simulate_linkage(conversion_result.linkage, n_iterations)
+                results["pylinkage"]["time_ms"] = (time.perf_counter() - start_time) * 1000
+                
+                if sim_result.success:
+                    results["pylinkage"]["success"] = True
+                    pylinkage_positions = sim_result.trajectories
+                    print(f"✓ Pylinkage solver completed in {results['pylinkage']['time_ms']:.2f}ms")
+                else:
+                    results["pylinkage"]["error"] = sim_result.errors
+            else:
+                results["pylinkage"]["error"] = conversion_result.errors
+                
+        except Exception as e:
+            results["pylinkage"]["error"] = str(e)
+            print(f"✗ Pylinkage solver failed: {e}")
+        
+        # ─────────────────────────────────────────────────────────────
+        # Compare Results
+        # ─────────────────────────────────────────────────────────────
+        if results["automata"]["success"] and results["pylinkage"]["success"]:
+            position_errors = []
+            
+            # Compare trajectories for matching joints
+            for link_name, automata_pos in automata_positions.items():
+                if link_name in pylinkage_positions:
+                    pylinkage_traj = pylinkage_positions[link_name]
+                    # Compare pos2 (end positions)
+                    if automata_pos["pos2"] is not None and pylinkage_traj is not None:
+                        diff = np.abs(automata_pos["pos2"] - pylinkage_traj)
+                        position_errors.extend(diff.flatten().tolist())
+            
+            if position_errors:
+                results["comparison"] = {
+                    "max_position_error": float(np.max(position_errors)),
+                    "mean_position_error": float(np.mean(position_errors)),
+                    "automata_time_ms": results["automata"]["time_ms"],
+                    "pylinkage_time_ms": results["pylinkage"]["time_ms"],
+                    "speedup_factor": results["automata"]["time_ms"] / max(results["pylinkage"]["time_ms"], 0.001)
+                }
+        
+        return {
+            "status": "success" if (results["automata"]["success"] or results["pylinkage"]["success"]) else "error",
+            "automata_result": results["automata"],
+            "pylinkage_result": results["pylinkage"],
+            "comparison": results["comparison"]
+        }
+        
+    except Exception as e:
+        print(f"Error in compare_solvers: {e}")
+        traceback.print_exc()
+        return {
+            "status": "error",
+            "message": f"Comparison failed: {str(e)}",
+            "traceback": traceback.format_exc().split('\n')
         }
