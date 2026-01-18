@@ -1,1 +1,0 @@
-# This file makes structs a Python package

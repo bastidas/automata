@@ -11,7 +11,6 @@ import {
 } from '@mui/material'
 import cheetahGif from './assets/cheetah_run.gif'
 import PylinkBuilderTab from './components/PylinkBuilderTab'
-import GraphBuilderTab from './components/GraphBuilderTab'
 import ForceGraphViewTab from './components/ForceGraphViewTab'
 import StatusAboutTab from './components/StatusAboutTab'
 import { muiThemeConfig } from './theme'
@@ -59,16 +58,14 @@ function App() {
         <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 1 }}>
           <Tabs value={currentTab} onChange={handleTabChange} centered>
             <Tab label="Pylink Builder" />
-            <Tab label="Graph Builder" />
             <Tab label="Graph View" />
             <Tab label="Status & About" />
           </Tabs>
         </Box>
 
         {currentTab === 0 && <PylinkBuilderTab />}
-        {currentTab === 1 && <GraphBuilderTab />}
-        {currentTab === 2 && <ForceGraphViewTab />}
-        {currentTab === 3 && <StatusAboutTab />}
+        {currentTab === 1 && <ForceGraphViewTab />}
+        {currentTab === 2 && <StatusAboutTab />}
       </Container>
     </ThemeProvider>
   )

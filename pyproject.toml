@@ -48,6 +48,16 @@ dev = [
 
 [tool.setuptools_scm]
 
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --strict-markers"
+testpaths = [
+    "tests",
+]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["configs*", "structs*", "backend*", "frontend*", "link*", "viz_tools*", "tests*"]

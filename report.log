@@ -1,0 +1,2 @@
+2026-01-17 21:30:23,964 - pyswarms.single.local_best - INFO - Optimize for 200 iters with {'c1': 3.0, 'c2': 0.1, 'w': 0.6, 'k': 17, 'p': 1}
+2026-01-17 21:30:25,684 - pyswarms.single.local_best - INFO - Optimization finished | best cost: 0.14834066286572883, best pos: [2.50108658 2.84632779 2.86642671]
