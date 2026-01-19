@@ -6,6 +6,17 @@
 
 set -e  # Exit on any error
 
+# Parse arguments
+SKIP_INSTALL=true
+for arg in "$@"; do
+    case $arg in
+        -q|--quick)
+            SKIP_INSTALL=true
+            shift
+            ;;
+    esac
+done
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -20,9 +31,10 @@ FRONTEND_URL="http://localhost:${FRONTEND_PORT}"
 
 # Print banner
 echo -e "${BLUE}"
-echo "=================================================="
-echo "    🐆 ACINONYX - High-Speed Linkage Simulation"
-echo "=================================================="
+echo "    🐆 ACINONYX - Mechanical Linkage Simulation"
+if [ "$SKIP_INSTALL" = true ]; then
+    echo -e "    ${YELLOW}(quick mode - skipping install checks)${NC}"
+fi
 echo -e "${NC}"
 
 # Function to print status messages
@@ -66,7 +78,7 @@ wait_for_service() {
     local name=$2
     local max_attempts=30
     local attempt=1
-    
+
     print_status "Waiting for $name to be ready..."
     while [ $attempt -le $max_attempts ]; do
         if curl -s "$url" > /dev/null 2>&1; then
@@ -77,7 +89,7 @@ wait_for_service() {
         sleep 1
         attempt=$((attempt + 1))
     done
-    
+
     print_error "$name failed to start within 30 seconds"
     return 1
 }
@@ -164,24 +176,28 @@ if ! port_available $FRONTEND_PORT; then
     fi
 fi
 
-# Check if automata package is installed
-if ! python -c "import automata" 2>/dev/null; then
-    print_status "Installing automata package in development mode..."
-    pip install -e . || {
-        print_error "Failed to install automata package"
-        exit 1
-    }
-fi
+# Check if automata package is installed (skip with -q/--quick)
+if [ "$SKIP_INSTALL" = false ]; then
+    if ! python -c "import automata" 2>/dev/null; then
+        print_status "Installing automata package in development mode..."
+        pip install -e . || {
+            print_error "Failed to install automata package"
+            exit 1
+        }
+    fi
 
-# Check frontend dependencies
-if [ ! -d "frontend/node_modules" ]; then
-    print_status "Installing frontend dependencies..."
-    cd frontend
-    npm install || {
-        print_error "Failed to install frontend dependencies"
-        exit 1
-    }
-    cd ..
+    # Check frontend dependencies
+    if [ ! -d "frontend/node_modules" ]; then
+        print_status "Installing frontend dependencies..."
+        cd frontend
+        npm install || {
+            print_error "Failed to install frontend dependencies"
+            exit 1
+        }
+        cd ..
+    fi
+else
+    print_status "Skipping dependency checks (quick mode)"
 fi
 
 print_status "Environment check completed successfully!"
@@ -265,11 +281,12 @@ fi
 
 echo
 print_status "🎉 Automata is now running!"
-echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}Frontend: ${FRONTEND_URL}${NC}"
 echo -e "${GREEN}Backend API: http://localhost:${BACKEND_PORT}${NC}"
 echo -e "${GREEN}API Docs: http://localhost:${BACKEND_PORT}/docs${NC}"
-echo -e "${GREEN}========================================${NC}"
+if [ "$SKIP_INSTALL" = false ]; then
+    echo -e "${YELLOW}Tip: Use './run.sh -q' or './run.sh --quick' to skip install checks${NC}"
+fi
 echo
 print_status "Monitoring logs... Press Ctrl+C to stop all services"
 echo

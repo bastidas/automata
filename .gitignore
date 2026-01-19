@@ -126,7 +126,7 @@ user/
 automata/user
 
 
-# ds 
+# ds
 .DS_Store
 
 # Node.js
@@ -139,4 +139,7 @@ frontend/node_modules/
 #this project
 movement_ref
 notebooks
+frontend.log
+backend.log
+report.log
 backend/report.log

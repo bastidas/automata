@@ -9,7 +9,7 @@ import {
   Tabs,
   Tab
 } from '@mui/material'
-import cheetahGif from './assets/cheetah_run.gif'
+import acinonyxLogo from './assets/acinonyx_logo.png'
 import PylinkBuilderTab from './components/PylinkBuilderTab'
 import ForceGraphViewTab from './components/ForceGraphViewTab'
 import StatusAboutTab from './components/StatusAboutTab'
@@ -28,35 +28,116 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Container maxWidth={false} sx={{ 
-        py: 0, 
-        px: currentTab === 0 ? 0 : 2, 
+      <Container maxWidth={false} sx={{
+        py: 0,
+        px: currentTab === 0 ? 0 : 2,
         maxWidth: currentTab === 0 ? '100%' : '1600px',
         backgroundColor: 'var(--color-surface)',
         minHeight: '100vh',
         transition: 'background-color 0.25s ease'
       }}>
-        <Box sx={{ textAlign: 'center', mb: 0, mt: -1 }}>
-          <img 
-            src={cheetahGif} 
-            alt="Acinonyx Cheetah" 
-            style={{ 
-              maxWidth: '140px', 
-              height: 'auto', 
-              marginBottom: '-45px',
-              borderRadius: '0px'
-            }} 
-          />
-          <Typography variant="h6" component="h1" sx={{ mb: -0.5, fontWeight: 600 }}>
-            Acinonyx
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
-          Mechanical Linkage Simulation
-          </Typography>
+        {/* Compact Header - Logo, Title, and Subtitle on single line */}
+        <Box
+          className="app-header"
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 2,
+            py: 1,
+            px: 2,
+            backgroundColor: 'var(--color-bg-tan)',
+            borderBottom: '1px solid var(--color-border-light)',
+            transition: 'all 0.25s ease'
+          }}
+        >
+          {/* Logo wrapper - clips to middle third and floats above header */}
+          <Box
+            sx={{
+              position: 'relative',
+              width: '140px',
+              height: '46px', // Keep header compact
+              overflow: 'hidden',
+              marginTop: '-10px', // Float above header (10px from top)
+              marginBottom: '-12px',
+              flexShrink: 0,
+            }}
+          >
+            <img
+              src={acinonyxLogo}
+              alt="Acinonyx"
+              style={{
+                width: '140px',
+                height: '140px', // Full size for the content
+                objectFit: 'cover',
+                objectPosition: 'center 45%', // Show middle-ish third (cheetah body)
+                position: 'absolute',
+                top: '-47px', // Pull up to show middle third
+                left: '0',
+              }}
+            />
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
+            <Typography
+              variant="h6"
+              component="h1"
+              className="app-title"
+              sx={{
+                fontWeight: 700,
+                fontSize: '1.2rem',
+                color: 'var(--color-text-primary)',
+                letterSpacing: '0.5px',
+                transition: 'color 0.25s ease'
+              }}
+            >
+              Acinonyx
+            </Typography>
+            <Typography
+              variant="body2"
+              className="app-subtitle"
+              sx={{
+                color: 'var(--color-text-muted)',
+                fontSize: '0.85rem',
+                fontWeight: 400,
+                transition: 'color 0.25s ease'
+              }}
+            >
+              Mechanical Linkage Simulation
+            </Typography>
+          </Box>
         </Box>
 
-        <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 1 }}>
-          <Tabs value={currentTab} onChange={handleTabChange} centered>
+        {/* Tabs */}
+        <Box sx={{
+          borderBottom: '1px solid var(--color-border-light)',
+          backgroundColor: 'var(--color-surface)',
+          transition: 'all 0.25s ease'
+        }}>
+          <Tabs
+            value={currentTab}
+            onChange={handleTabChange}
+            centered
+            sx={{
+              minHeight: 40,
+              '& .MuiTab-root': {
+                minHeight: 40,
+                py: 1,
+                fontSize: '0.8rem',
+                fontWeight: 500,
+                color: 'var(--color-text-secondary)',
+                transition: 'color 0.2s ease',
+                '&.Mui-selected': {
+                  color: 'var(--color-primary)',
+                  fontWeight: 600
+                }
+              },
+              '& .MuiTabs-indicator': {
+                backgroundColor: 'var(--color-primary)',
+                height: 3,
+                borderRadius: '3px 3px 0 0'
+              }
+            }}
+          >
             <Tab label="Pylink Builder" />
             <Tab label="Graph View" />
             <Tab label="Status & About" />

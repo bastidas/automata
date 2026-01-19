@@ -11,29 +11,25 @@ Critical validation:
 - Simulation can be executed
 - Basic trajectory data is generated
 """
+from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# Add project root to path
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
+from pylink_tools.demo import make_demo_linkage
+from pylink_tools.demo import optimization
 
 # Import pylinkage at module level
 try:
-    from pylinkage.joints import Crank, Revolute
-    from pylinkage.linkage import Linkage
+    import pylinkage
     PYLINKAGE_AVAILABLE = True
+    del pylinkage  # Only testing importability
 except ImportError:
     PYLINKAGE_AVAILABLE = False
 
-from pylink_tools.demo import make_demo_linkage, optimization
 
 def test_pylinkage_import():
     """Test that pylinkage can be imported"""
     if not PYLINKAGE_AVAILABLE:
-        print("❌ Cannot import pylinkage - Fix: pip install pylinkage")
-    assert PYLINKAGE_AVAILABLE, "pylinkage not installed - run: pip install pylinkage"
+        print('❌ Cannot import pylinkage - Fix: pip install pylinkage')
+    assert PYLINKAGE_AVAILABLE, 'pylinkage not installed - run: pip install pylinkage'
 
 
 def test_demo():

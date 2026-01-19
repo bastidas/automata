@@ -14,7 +14,7 @@ export interface Link {
   length: number // Required, must be > 0 and <= 100
   n_iterations: number // Required, must be >= 1 and <= 1000
   has_fixed: boolean // Required in backend
-  
+
   // Optional fields from backend
   target_length?: number | null
   target_cost_func?: string | null
@@ -24,7 +24,7 @@ export interface Link {
   is_ground?: boolean // Ground link between fixed anchors (frame)
   flip?: boolean
   zlevel?: number
-  
+
   // Frontend metadata (single source of truth for UI properties)
   meta: LinkMeta
 }
@@ -33,7 +33,7 @@ export interface Node {
   // Required fields matching backend ground truth
   name: string // Required in backend
   n_iterations: number // Required, must be >= 1 and <= 1000
-  
+
   // Optional fields from backend
   fixed?: boolean
   fixed_loc?: [number, number] | null
@@ -60,7 +60,7 @@ export interface CreateLinkRequest {
   length: number
   n_iterations: number
   has_fixed: boolean
-  
+
   // Optional fields
   target_length?: number | null
   target_cost_func?: string | null

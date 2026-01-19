@@ -1,6 +1,6 @@
 /**
  * PylinkAnimateSimulate.tsx
- * 
+ *
  * Helper module for Pylink animation and simulation functionality.
  * Handles:
  * - Animation state management (play/pause frame-by-frame linkage motion)
@@ -82,10 +82,10 @@ export function useAnimation({
     ...initialAnimationState,
     totalFrames: trajectoryData?.nSteps ?? 0
   })
-  
+
   const animationFrameRef = useRef<number | null>(null)
   const lastFrameTimeRef = useRef<number>(0)
-  
+
   // Use refs to track current values without causing re-renders in animation loop
   const isAnimatingRef = useRef(animationState.isAnimating)
   const playbackSpeedRef = useRef(animationState.playbackSpeed)
@@ -93,7 +93,7 @@ export function useAnimation({
   const currentFrameRef = useRef(animationState.currentFrame)
   const totalFramesRef = useRef(animationState.totalFrames)
   const onFrameChangeRef = useRef(onFrameChange)
-  
+
   // Keep refs in sync with state
   useEffect(() => {
     isAnimatingRef.current = animationState.isAnimating
@@ -102,11 +102,11 @@ export function useAnimation({
     currentFrameRef.current = animationState.currentFrame
     totalFramesRef.current = animationState.totalFrames
   }, [animationState])
-  
+
   useEffect(() => {
     onFrameChangeRef.current = onFrameChange
   }, [onFrameChange])
-  
+
   // Update total frames when trajectory data changes
   useEffect(() => {
     if (trajectoryData) {
@@ -129,7 +129,7 @@ export function useAnimation({
       }))
     }
   }, [trajectoryData])
-  
+
   // Animation loop - only depends on isAnimating state to start/stop
   useEffect(() => {
     if (!animationState.isAnimating || !trajectoryData) {
@@ -140,22 +140,22 @@ export function useAnimation({
       }
       return
     }
-    
+
     const animate = (timestamp: number) => {
       // Check ref to see if we should stop (allows immediate pause)
       if (!isAnimatingRef.current) {
         animationFrameRef.current = null
         return
       }
-      
+
       const elapsed = timestamp - lastFrameTimeRef.current
       const adjustedInterval = frameIntervalMs / playbackSpeedRef.current
-      
+
       if (elapsed >= adjustedInterval) {
         lastFrameTimeRef.current = timestamp
-        
+
         let nextFrame = currentFrameRef.current + 1
-        
+
         // Handle loop or stop at end
         if (nextFrame >= totalFramesRef.current) {
           if (loopRef.current) {
@@ -163,33 +163,33 @@ export function useAnimation({
           } else {
             // Stop animation at the end
             isAnimatingRef.current = false
-            setAnimationState(prev => ({ 
-              ...prev, 
-              isAnimating: false, 
-              currentFrame: prev.totalFrames - 1 
+            setAnimationState(prev => ({
+              ...prev,
+              isAnimating: false,
+              currentFrame: prev.totalFrames - 1
             }))
             animationFrameRef.current = null
             return
           }
         }
-        
+
         // Update refs immediately
         currentFrameRef.current = nextFrame
-        
+
         // Notify parent of frame change
         onFrameChangeRef.current(nextFrame)
-        
+
         // Batch state update
         setAnimationState(prev => ({ ...prev, currentFrame: nextFrame }))
       }
-      
+
       // Continue animation loop
       animationFrameRef.current = requestAnimationFrame(animate)
     }
-    
+
     lastFrameTimeRef.current = performance.now()
     animationFrameRef.current = requestAnimationFrame(animate)
-    
+
     return () => {
       if (animationFrameRef.current !== null) {
         cancelAnimationFrame(animationFrameRef.current)
@@ -197,14 +197,14 @@ export function useAnimation({
       }
     }
   }, [animationState.isAnimating, trajectoryData, frameIntervalMs])
-  
+
   const play = useCallback(() => {
     if (!trajectoryData || trajectoryData.nSteps === 0) return
     // Update ref immediately for responsive animation start
     isAnimatingRef.current = true
     setAnimationState(prev => ({ ...prev, isAnimating: true }))
   }, [trajectoryData])
-  
+
   const pause = useCallback(() => {
     // Update ref immediately so animation loop stops on next check
     isAnimatingRef.current = false
@@ -215,7 +215,7 @@ export function useAnimation({
     }
     setAnimationState(prev => ({ ...prev, isAnimating: false }))
   }, [])
-  
+
   const stop = useCallback(() => {
     // Update refs immediately
     isAnimatingRef.current = false
@@ -228,13 +228,13 @@ export function useAnimation({
     setAnimationState(prev => ({ ...prev, isAnimating: false, currentFrame: 0 }))
     onFrameChangeRef.current(0)
   }, [])
-  
+
   const reset = useCallback(() => {
     currentFrameRef.current = 0
     setAnimationState(prev => ({ ...prev, currentFrame: 0 }))
     onFrameChangeRef.current(0)
   }, [])
-  
+
   const setFrame = useCallback((frame: number) => {
     const clampedFrame = Math.max(0, Math.min(frame, totalFramesRef.current - 1))
     currentFrameRef.current = clampedFrame
@@ -244,33 +244,33 @@ export function useAnimation({
     }))
     onFrameChangeRef.current(frame)
   }, [])
-  
+
   const setPlaybackSpeed = useCallback((speed: number) => {
     playbackSpeedRef.current = speed
     setAnimationState(prev => ({ ...prev, playbackSpeed: speed }))
   }, [])
-  
+
   const setLoop = useCallback((loop: boolean) => {
     loopRef.current = loop
     setAnimationState(prev => ({ ...prev, loop }))
   }, [])
-  
+
   /** Get joint positions for the current animation frame */
   const getAnimatedPositions = useCallback((): Record<string, [number, number]> | null => {
     if (!trajectoryData) return null
-    
+
     const positions: Record<string, [number, number]> = {}
     const frame = animationState.currentFrame
-    
+
     for (const [jointName, trajectory] of Object.entries(trajectoryData.trajectories)) {
       if (trajectory && trajectory[frame]) {
         positions[jointName] = trajectory[frame]
       }
     }
-    
+
     return positions
   }, [trajectoryData, animationState.currentFrame])
-  
+
   return {
     animationState,
     play,
@@ -333,7 +333,7 @@ export function useSimulation({
   const [trajectoryData, setTrajectoryData] = useState<TrajectoryData | null>(null)
   const [autoSimulateEnabled, setAutoSimulateEnabled] = useState(initialAutoSimulate)
   const autoSimulateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  
+
   /** Run simulation against the backend */
   const runSimulation = useCallback(async () => {
     const hasCrank = pylinkDoc.pylinkage.joints.some((j: { type: string }) => j.type === 'Crank')
@@ -341,12 +341,12 @@ export function useSimulation({
       showStatus?.('Cannot simulate: no Crank joint defined', 'warning', 2000)
       return
     }
-    
+
     try {
       setIsSimulating(true)
       onSimulationStart?.()
       showStatus?.(`Simulating ${simulationSteps} steps...`, 'action')
-      
+
       const response = await fetch('/api/compute-pylink-trajectory', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -355,10 +355,10 @@ export function useSimulation({
           n_steps: simulationSteps
         })
       })
-      
+
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
       const result = await response.json()
-      
+
       if (result.status === 'success') {
         const data: TrajectoryData = {
           trajectories: result.trajectories,
@@ -381,30 +381,30 @@ export function useSimulation({
       setIsSimulating(false)
     }
   }, [pylinkDoc, simulationSteps, showStatus, onSimulationStart, onSimulationComplete, onSimulationError])
-  
+
   /** Clear trajectory data */
   const clearTrajectory = useCallback(() => {
     setTrajectoryData(null)
     showStatus?.('Trajectory cleared', 'info', 1500)
   }, [showStatus])
-  
+
   // Auto-simulation effect
   useEffect(() => {
     if (!autoSimulateEnabled) return
-    
+
     const hasCrank = pylinkDoc.pylinkage.joints.some((j: { type: string }) => j.type === 'Crank')
     if (!hasCrank) return
-    
+
     // Clear any existing timer
     if (autoSimulateTimerRef.current) {
       clearTimeout(autoSimulateTimerRef.current)
     }
-    
+
     // Set new timer
     autoSimulateTimerRef.current = setTimeout(() => {
       runSimulation()
     }, autoSimulateDelayMs)
-    
+
     // Cleanup
     return () => {
       if (autoSimulateTimerRef.current) {
@@ -412,7 +412,7 @@ export function useSimulation({
       }
     }
   }, [mechanismVersion, autoSimulateEnabled, pylinkDoc, autoSimulateDelayMs, runSimulation])
-  
+
   return {
     isSimulating,
     trajectoryData,
@@ -456,12 +456,12 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
   compact = false
 }) => {
   const { isAnimating, currentFrame, totalFrames, playbackSpeed } = animationState
-  
+
   return (
-    <Box sx={{ 
-      display: 'flex', 
+    <Box sx={{
+      display: 'flex',
       flexDirection: compact ? 'row' : 'column',
-      alignItems: 'center', 
+      alignItems: 'center',
       gap: compact ? 1 : 0.5,
       p: compact ? 0 : 1
     }}>
@@ -484,7 +484,7 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
             </IconButton>
           </span>
         </Tooltip>
-        
+
         <Tooltip title="Stop & Reset">
           <span>
             <IconButton
@@ -498,12 +498,12 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
           </span>
         </Tooltip>
       </Box>
-      
+
       {/* Frame Counter */}
       <Typography variant="caption" sx={{ color: 'text.secondary', minWidth: 60, textAlign: 'center' }}>
         {currentFrame + 1} / {totalFrames || '-'}
       </Typography>
-      
+
       {/* Timeline Slider (only if not compact) */}
       {!compact && totalFrames > 0 && (
         <Slider
@@ -516,7 +516,7 @@ export const AnimationControls: React.FC<AnimationControlsProps> = ({
           sx={{ width: '100%', mt: 0.5 }}
         />
       )}
-      
+
       {/* Speed Control (only if not compact) */}
       {!compact && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
@@ -580,5 +580,3 @@ export function getAnimationDuration(totalFrames: number, frameIntervalMs: numbe
 export function canSimulate(joints: Array<{ type: string }>): boolean {
   return joints.some(j => j.type === 'Crank')
 }
-
-

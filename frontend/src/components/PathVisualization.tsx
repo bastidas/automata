@@ -89,15 +89,15 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
 
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height)
-    
+
     const { bounds, links, history_data } = pathData
     const canvasWidth = canvas.width
     const canvasHeight = canvas.height
 
     // Transform coordinates from data space to canvas space
-    const transformX = (x: number) => 
+    const transformX = (x: number) =>
       ((x - bounds.xmin) / (bounds.xmax - bounds.xmin)) * canvasWidth
-    const transformY = (y: number) => 
+    const transformY = (y: number) =>
       canvasHeight - ((y - bounds.ymin) / (bounds.ymax - bounds.ymin)) * canvasHeight
 
     // Draw historical trails if enabled (30% bigger: 3 -> 4)
@@ -106,7 +106,7 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
         for (let i = 0; i < historyItem.positions.length; i++) {
           const pos = historyItem.positions[i]
           const colorInfo = historyItem.colors[i]
-          
+
           ctx.globalAlpha = colorInfo.alpha
           ctx.fillStyle = colorInfo.color
           ctx.beginPath()
@@ -132,12 +132,12 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
 
     // First pass: Draw current frame links and nodes (30% bigger: lines 3->4, 2->3; nodes 4->5)
     const labelPositions: Array<{name: string, x: number, y: number}> = []
-    
+
     for (const link of links) {
       if (frame < link.pos1.length && frame < link.pos2.length) {
         const pos1 = link.pos1[frame]
         const pos2 = link.pos2[frame]
-        
+
         const x1 = transformX(pos1[0])
         const y1 = transformY(pos1[1])
         const x2 = transformX(pos2[0])
@@ -146,30 +146,30 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
         // Draw link line
         ctx.strokeStyle = link.is_ground ? jointColors.ground : frameColor  // Gray for ground
         ctx.lineWidth = link.is_driven ? 4 : (link.is_ground ? 2 : 3)
-        
+
         // Use dashed line for ground links
         if (link.is_ground) {
           ctx.setLineDash([8, 4])  // 8px dash, 4px gap
         } else {
           ctx.setLineDash([])  // Solid line
         }
-        
+
         ctx.beginPath()
         ctx.moveTo(x1, y1)
         ctx.lineTo(x2, y2)
         ctx.stroke()
-        
+
         // Reset line dash for other drawing
         ctx.setLineDash([])
 
         // Draw nodes (pos1 and pos2)
         ctx.fillStyle = frameColor
-        
+
         // pos1 node
         ctx.beginPath()
         ctx.arc(x1, y1, 5, 0, 2 * Math.PI)
         ctx.fill()
-        
+
         // pos2 node
         ctx.beginPath()
         ctx.arc(x2, y2, 5, 0, 2 * Math.PI)
@@ -183,7 +183,7 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
         }
       }
     }
-    
+
     // Second pass: Draw labels on top of all lines
     if (showLabels) {
       ctx.fillStyle = '#333'
@@ -237,7 +237,7 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
         <Typography variant="h6" gutterBottom>
           Path Visualization
         </Typography>
-        
+
         <Box sx={{ mb: 2 }}>
           <canvas
             ref={canvasRef}
@@ -264,7 +264,7 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
               {isPlaying ? 'Pause' : 'Play'}
             </Button>
           </Grid>
-          
+
           <Grid item>
             <Button
               variant="outlined"
@@ -281,7 +281,7 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
               <svg width="80" height="80" viewBox="0 0 80 80">
                 {/* Outer circle */}
                 <circle cx="40" cy="40" r="35" fill="none" stroke="#ddd" strokeWidth="2" />
-                
+
                 {/* Tick marks for each frame */}
                 {Array.from({ length: pathData.n_iterations }, (_, i) => {
                   const angle = (i / pathData.n_iterations) * 2 * Math.PI - Math.PI / 2
@@ -303,7 +303,7 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
                     />
                   )
                 })}
-                
+
                 {/* Pointer/hand */}
                 {(() => {
                   const angle = (currentFrame / pathData.n_iterations) * 2 * Math.PI - Math.PI / 2
@@ -327,7 +327,7 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
                     </>
                   )
                 })()}
-                
+
                 {/* Frame number in center */}
                 <text
                   x="40"
@@ -369,7 +369,7 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
               label="Show History Trail"
             />
           </Grid>
-          
+
           <Grid item>
             <FormControlLabel
               control={
@@ -381,7 +381,7 @@ const PathVisualization: React.FC<PathVisualizationProps> = ({ pathData }) => {
               label="Show Link Labels"
             />
           </Grid>
-          
+
           <Grid item xs>
             <Typography gutterBottom>Playback Speed (ms/frame)</Typography>
             <Slider

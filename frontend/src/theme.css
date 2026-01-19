@@ -1,11 +1,11 @@
 /* =============================================================================
    ACINONYX THEME - Centralized Color & Style Variables
    =============================================================================
-   
+
    USAGE:
    - CSS: var(--color-primary)
    - TypeScript: import { theme } from './theme'
-   
+
    To change the theme, modify the CSS custom properties below.
    ============================================================================= */
 
@@ -16,7 +16,7 @@
   --color-primary: #FA8112;           /* Main highlight/accent - cheetah orange */
   --color-primary-light: #FFB347;     /* Lighter variant */
   --color-primary-dark: #D96A00;      /* Darker variant for hover states */
-  
+
   /* -------------------------------------------------------------------------
      BACKGROUND COLORS
      ------------------------------------------------------------------------- */
@@ -25,7 +25,7 @@
   --color-bg-tan-accent: #EAC381;     /* Tan accent for highlights */
   --color-bg-dark: #222222;           /* Dark mode primary background */
   --color-bg-dark-alt: #231A32;       /* Dark mode alternate (purple-tinted) */
-  
+
   /* -------------------------------------------------------------------------
      STATUS & FEEDBACK COLORS
      ------------------------------------------------------------------------- */
@@ -37,7 +37,7 @@
   --color-warning-dark: #ED6C02;      /* Strong warning */
   --color-error: #D32F2F;             /* Error states */
   --color-error-light: #FFEBEE;       /* Error background */
-  
+
   /* -------------------------------------------------------------------------
      TEXT COLORS
      ------------------------------------------------------------------------- */
@@ -46,7 +46,7 @@
   --color-text-muted: #888888;        /* Muted/disabled text */
   --color-text-on-dark: #FAF3E1;      /* Text on dark backgrounds */
   --color-text-on-primary: #FFFFFF;   /* Text on primary color */
-  
+
   /* -------------------------------------------------------------------------
      SURFACE & BORDER COLORS
      ------------------------------------------------------------------------- */
@@ -55,7 +55,7 @@
   --color-border: #E0E0E0;            /* Default borders */
   --color-border-light: #EEEEEE;      /* Light borders */
   --color-divider: #E0E0E0;           /* Dividers */
-  
+
   /* -------------------------------------------------------------------------
      GRAPH/VISUALIZATION COLORS - Data visualization palette
      ------------------------------------------------------------------------- */
@@ -69,7 +69,7 @@
   --color-graph-gray: #7F7F7F;
   --color-graph-olive: #BCBD22;
   --color-graph-cyan: #17BECF;
-  
+
   /* -------------------------------------------------------------------------
      JOINT/LINKAGE SPECIFIC COLORS
      ------------------------------------------------------------------------- */
@@ -80,14 +80,14 @@
   --color-link-selected: #1976D2;     /* Selected link highlight */
   --color-move-group: #9E9E9E;        /* Move group indication */
   --color-merge-highlight: #00BCD4;   /* Merge indication - cyan */
-  
+
   /* -------------------------------------------------------------------------
      SHADOWS & EFFECTS
      ------------------------------------------------------------------------- */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
   --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
-  
+
   /* -------------------------------------------------------------------------
      SPACING (for reference)
      ------------------------------------------------------------------------- */
@@ -96,7 +96,7 @@
   --spacing-md: 16px;
   --spacing-lg: 24px;
   --spacing-xl: 32px;
-  
+
   /* -------------------------------------------------------------------------
      BORDER RADIUS
      ------------------------------------------------------------------------- */
@@ -104,7 +104,7 @@
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-full: 9999px;
-  
+
   /* -------------------------------------------------------------------------
      TRANSITIONS
      ------------------------------------------------------------------------- */
@@ -129,7 +129,7 @@
   --color-border: #444444;
   --color-border-light: #333333;
   --color-divider: #444444;
-  
+
   /* Canvas/SVG specific */
   --color-canvas-bg: #1a1a1a;
   --color-grid-major: #444444;
@@ -246,6 +246,57 @@ html, body {
   color: #FA8112;
 }
 
+.dark-mode .MuiCard-root {
+  background-color: #2a2a2a;
+  border-color: #444;
+}
+
+.dark-mode .MuiCardContent-root {
+  color: #e0e0e0;
+}
+
+.dark-mode .MuiAlert-standardSuccess {
+  background-color: rgba(76, 175, 80, 0.15);
+  color: #81c784;
+}
+
+.dark-mode .MuiAlert-standardError {
+  background-color: rgba(211, 47, 47, 0.15);
+  color: #ef5350;
+}
+
+.dark-mode a {
+  color: #FA8112;
+}
+
+.dark-mode a:hover {
+  color: #FFB347;
+}
+
+/* App header title styling in dark mode */
+.dark-mode .app-header {
+  background-color: #1a1a1a !important;
+  border-bottom-color: #333 !important;
+}
+
+.dark-mode .app-title {
+  color: var(--color-text-on-dark) !important;
+}
+
+.dark-mode .app-subtitle {
+  color: #999 !important;
+}
+
+/* Footer toolbar logo */
+.footer-logo {
+  opacity: 0.7;
+  transition: opacity 0.2s ease;
+}
+
+.footer-logo:hover {
+  opacity: 1;
+}
+
 /* Toolbar panel backgrounds in dark mode */
 .dark-mode .toolbar-toggle-buttons-container {
   background-color: rgba(40, 40, 40, 0.9) !important;
@@ -278,4 +329,3 @@ html, body {
 .border-success { border-color: var(--color-success); }
 .border-warning { border-color: var(--color-warning); }
 .border-error { border-color: var(--color-error); }
-

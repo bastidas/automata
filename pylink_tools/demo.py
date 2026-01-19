@@ -1,5 +1,6 @@
-import pylinkage as pl
+from __future__ import annotations
 
+import pylinkage as pl
 
 
 def make_demo_linkage():
@@ -10,28 +11,26 @@ def make_demo_linkage():
     crank = pl.Crank(0, 1, joint0=(0, 0), angle=.31, distance=1)
     # Close the loop
     pin = pl.Revolute(
-        3, 2, joint0=crank, joint1=(3, 0), 
-        distance0=3, distance1=1
+        3, 2, joint0=crank, joint1=(3, 0),
+        distance0=3, distance1=1,
     )
 
     my_linkage = pl.Linkage(joints=(crank, pin))
 
-    locus = my_linkage.step()
+    crank.name = 'B'
 
-    crank.name = "B"
-    
     """
     Here we are actually doing the following:
 
     0, 1: x and y initial coordinates of the tail of the crank link.
-    joint0: the position of the parent Joint to link with, here it is a fixed point in 
+    joint0: the position of the parent Joint to link with, here it is a fixed point in
     space. The pin will be created on the position of the parent, which is the head of
     the crank link.
     angle: the crank will rotate with this angle, in radians, at each iteration.
     distance: distance to keep constant between crank link tail and head.
     Now we add a pin joint to close the kinematic loop.
     """
-    pin.name = "C"
+    pin.name = 'C'
 
     """
     In human language, here is what is happening:
@@ -42,12 +41,12 @@ def make_demo_linkage():
     incompatible with distance to parents/parents' positions!
 
     This explanation is simple: mathematically a pin joint the intersection of two circles.
-    The intersection is often two points. To choose the starting point, we calculate both 
+    The intersection is often two points. To choose the starting point, we calculate both
     intersection (when possible), then we keep the intersection closer to the previous
    position as the solution.
     """
     # Linkage can also have names
-    my_linkage.name = "Four-bar linkage"
+    my_linkage.name = 'Four-bar linkage'
 
     # pl.show_linkage(my_linkage)
     return my_linkage
@@ -55,9 +54,9 @@ def make_demo_linkage():
 
 def optimization(my_linkage):
     """
-    
+
     Now, we want automatic optimization of our linkage, using a certain criterion.
-      Let's find a four-bar linkage that makes a quarter of a circle. It is a 
+      Let's find a four-bar linkage that makes a quarter of a circle. It is a
       common problem if you want to build a windshield wiper for instance.
 
     Our objective function, often called the fitness function, is the following:
@@ -88,9 +87,9 @@ def optimization(my_linkage):
     The decorator arguments are (linkage, constraints), it can also receive init_pos
     It sets the linkage with the constraints.
     Then it verifies if the linkage can do a complete crank turn.
-    If it can, pass the arguments and the resulting loci (path of joints) to the 
+    If it can, pass the arguments and the resulting loci (path of joints) to the
     decorated function.
-    If not, return the penalty. In a minimization problem the penalty will be 
+    If not, return the penalty. In a minimization problem the penalty will be
     float('inf').
     The decorated function should return the score of this linkage.
     With this constraint, the best theoretic score is 0.0.
@@ -108,16 +107,14 @@ def optimization(my_linkage):
         order_relation=min,
     )[0]
 
-    print(f"Best score: {score}")
-    print(f"Best position: {position}")
-    print(f"Best coordinates: {coord}")
+    print(f'Best score: {score}')
+    print(f'Best position: {position}')
+    print(f'Best coordinates: {coord}')
     # # Reset linkage to best found position
     # #my_linkage.set_coords(coord)
     # # Show the optimized linkage
     # pl.show_linkage(my_linkage)
     # print("Optimization done.")
-
-
 
     """
      Here the problem is simple enough, so that method takes only a few s
@@ -127,7 +124,7 @@ def optimization(my_linkage):
     efficient. Then we will use particle swarm optimization.
 
     """
-    #Reset the linkage to initial state before optimization
+    # Reset the linkage to initial state before optimization
     my_linkage.set_num_constraints(init_constraints)
     my_linkage.set_coords(init_pos)
 
@@ -140,14 +137,14 @@ def optimization(my_linkage):
         bounds=bounds,
         order_relation=min,
     )[0]
-    print(f"Best score: {score}")
-    print(f"Best position: {position}")
+    print(f'Best score: {score}')
+    print(f'Best position: {position}')
 
-    print(f"Best coordinates: {coord}")
+    print(f'Best coordinates: {coord}')
     return score
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     demo_linkage = make_demo_linkage()
     optimization(demo_linkage)
-    print("Demo complete.")
+    print('Demo complete.')

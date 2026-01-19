@@ -236,7 +236,7 @@ npm run format
 ### Common Issues
 
 **1. Module not found errors**
-- Ensure your conda environment is activated: 
+- Ensure your conda environment is activated:
   * for example if using pyenv `pyenv activate automata`
   * * for example if using anaconda `conda activate automata`
 - Verify installation: `pip list | grep automata`
@@ -261,10 +261,3 @@ npm run format
 ## License
 
 TBD
-
-
-
-
-
-
-

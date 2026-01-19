@@ -1,7 +1,12 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react'
-import { Box, Typography, Paper, IconButton } from '@mui/material'
+import {
+  Box, Typography, Paper, IconButton, Modal, TextField,
+  FormControl, InputLabel, Select, MenuItem, Button, Chip, Divider,
+  FormControlLabel, Switch, Tooltip
+} from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
-import { graphColors, statusColors, colors } from '../theme'
+import { graphColors, statusColors, colors, jointColors } from '../theme'
+import acinonyxLogo from '../assets/acinonyx_logo.png'
 
 
 // Threshold distance for merge detection (in units)
@@ -99,8 +104,8 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
         backdropFilter: 'blur(12px)',
         borderRadius: 3,
         border: '1px solid rgba(0,0,0,0.1)',
-        boxShadow: isDragging 
-          ? '0 12px 40px rgba(0,0,0,0.2)' 
+        boxShadow: isDragging
+          ? '0 12px 40px rgba(0,0,0,0.2)'
           : '0 4px 20px rgba(0,0,0,0.12)',
         transition: isDragging ? 'none' : 'box-shadow 0.2s ease',
         zIndex: isDragging ? 1400 : 1300,
@@ -168,12 +173,14 @@ export interface ToolbarConfig {
 // Tools & More: FULL LEFT ALIGNED, Tools below toggle buttons, More well below Tools
 // Links & Nodes: far right edge (negative x = offset from right), stacked vertically
 // Settings: gear icon, opens settings panel
+// Optimize: dedicated optimization panel
 export const TOOLBAR_CONFIGS: ToolbarConfig[] = [
   { id: 'tools', title: 'Tools', icon: '⚒', defaultPosition: { x: 8, y: 60 } },        // Full left, below toggle buttons
   { id: 'more', title: 'More', icon: '≡', defaultPosition: { x: 8, y: 370 } },         // Full left, well below Tools
+  { id: 'optimize', title: 'Optimize', icon: '✦', defaultPosition: { x: 240, y: 60 } }, // Optimization panel
   { id: 'links', title: 'Links', icon: '—', defaultPosition: { x: -220, y: 8 } },      // Far right edge (negative = from right)
   { id: 'nodes', title: 'Nodes', icon: '○', defaultPosition: { x: -220, y: 500 } },    // Below Links on far right
-  { id: 'settings', title: 'Settings', icon: '⚙', defaultPosition: { x: 250, y: 60 } } // Settings panel
+  { id: 'settings', title: 'Settings', icon: '⚙', defaultPosition: { x: 500, y: 60 } } // Settings panel
 ]
 
 export interface ToolbarToggleButtonsProps {
@@ -183,7 +190,7 @@ export interface ToolbarToggleButtonsProps {
 
 /**
  * ToolbarToggleButtonsContainer - The horizontal button bar for toggling toolbars
- * 
+ *
  * Contains: Tools, Links, Nodes, More buttons in a horizontal row
  * Position: Upper left of the canvas
  */
@@ -249,7 +256,7 @@ export const ToolbarToggleButtons: React.FC<ToolbarToggleButtonsProps> = ({
 // TYPES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export type ToolMode = 
+export type ToolMode =
   | 'select'
   | 'group_select'
   | 'mechanism_select'
@@ -259,6 +266,7 @@ export type ToolMode =
   | 'merge'
   | 'measure'
   | 'delete'
+  | 'draw_path'
 
 export interface ToolInfo {
   id: ToolMode
@@ -331,6 +339,13 @@ export const TOOLS: ToolInfo[] = [
     icon: '⌫',  // Delete/backspace icon
     description: 'Click a joint or link to delete it. Deleting a link removes orphan nodes. Deleting a node removes connected links.',
     shortcut: 'X'
+  },
+  {
+    id: 'draw_path',
+    label: 'Draw Path',
+    icon: '⌇',  // Target path icon
+    description: 'Draw a target path for trajectory optimization. Click to add points, double-click or press Enter to finish.',
+    shortcut: 'T'
   }
 ]
 
@@ -441,6 +456,51 @@ export interface MeasurementMarker {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// TARGET PATH DRAWING STATE - For trajectory optimization
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface TargetPath {
+  id: string
+  name: string
+  points: [number, number][]  // User-drawn path points
+  targetJoint: string | null  // Which joint should follow this path
+  color: string
+  isComplete: boolean
+}
+
+export interface PathDrawState {
+  isDrawing: boolean
+  points: [number, number][]  // Points being drawn
+}
+
+export const initialPathDrawState: PathDrawState = {
+  isDrawing: false,
+  points: []
+}
+
+export const createTargetPath = (
+  points: [number, number][],
+  existingPaths: TargetPath[]
+): TargetPath => {
+  // Generate unique ID
+  let counter = 1
+  let id = `target_path_${counter}`
+  while (existingPaths.some(p => p.id === id)) {
+    counter++
+    id = `target_path_${counter}`
+  }
+
+  return {
+    id,
+    name: `Target Path ${counter}`,
+    points,
+    targetJoint: null,
+    color: '#e91e63',  // Pink for target paths
+    isComplete: true
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // DRAWN OBJECT TYPES - For shapes/polygons that can be attached to links
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -496,7 +556,7 @@ export const createDrawnObject = (
     counter++
     id = `${type}_${counter}`
   }
-  
+
   return {
     id,
     type,
@@ -559,12 +619,12 @@ export const findConnectedMechanism = (
   const visitedJoints = new Set<string>()
   const visitedLinks = new Set<string>()
   const queue: string[] = [startJoint]
-  
+
   while (queue.length > 0) {
     const currentJoint = queue.shift()!
     if (visitedJoints.has(currentJoint)) continue
     visitedJoints.add(currentJoint)
-    
+
     // Find all links connected to this joint
     for (const [linkName, linkMeta] of Object.entries(links)) {
       if (linkMeta.connects.includes(currentJoint)) {
@@ -578,7 +638,7 @@ export const findConnectedMechanism = (
       }
     }
   }
-  
+
   return {
     joints: Array.from(visitedJoints),
     links: Array.from(visitedLinks)
@@ -597,10 +657,10 @@ export const findElementsInBox = (
   const maxX = Math.max(box.x1, box.x2)
   const minY = Math.min(box.y1, box.y2)
   const maxY = Math.max(box.y1, box.y2)
-  
+
   const selectedJoints: string[] = []
   const selectedLinks: string[] = []
-  
+
   // Check joints
   for (const joint of joints) {
     if (!joint.position) continue
@@ -609,19 +669,19 @@ export const findElementsInBox = (
       selectedJoints.push(joint.name)
     }
   }
-  
+
   // Check links - select if either endpoint is in the box
   for (const link of links) {
     if (!link.start || !link.end) continue
-    const startInBox = link.start[0] >= minX && link.start[0] <= maxX && 
+    const startInBox = link.start[0] >= minX && link.start[0] <= maxX &&
                        link.start[1] >= minY && link.start[1] <= maxY
-    const endInBox = link.end[0] >= minX && link.end[0] <= maxX && 
+    const endInBox = link.end[0] >= minX && link.end[0] <= maxX &&
                      link.end[1] >= minY && link.end[1] <= maxY
     if (startInBox || endInBox) {
       selectedLinks.push(link.name)
     }
   }
-  
+
   return { joints: selectedJoints, links: selectedLinks }
 }
 
@@ -632,6 +692,7 @@ export const findElementsInBox = (
 export interface LinkMetaData {
   color: string
   connects: string[]  // Array of joint names this link connects
+  isGround?: boolean  // True if this is a ground/anchored link
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -719,11 +780,11 @@ export const findOrphansAfterLinkRemoval = (
 ): string[] => {
   const link = links[linkName]
   if (!link) return []
-  
+
   // Create a copy of links without the target link
   const remainingLinks = { ...links }
   delete remainingLinks[linkName]
-  
+
   // Check each joint the link connects to see if it would become orphaned
   return link.connects.filter(jointName => isOrphan(jointName, remainingLinks))
 }
@@ -773,7 +834,7 @@ export const findOrphansAfterMultipleLinkRemovals = (
   // Create a copy of links without the target links
   const remainingLinks = { ...links }
   linkNames.forEach(linkName => delete remainingLinks[linkName])
-  
+
   // Collect all joints that were connected to the removed links
   const affectedJoints = new Set<string>()
   linkNames.forEach(linkName => {
@@ -786,7 +847,7 @@ export const findOrphansAfterMultipleLinkRemovals = (
       })
     }
   })
-  
+
   // Check which affected joints would become orphaned
   return Array.from(affectedJoints).filter(jointName => isOrphan(jointName, remainingLinks))
 }
@@ -804,10 +865,10 @@ export const calculateJointDeletionResult = (
   links: Record<string, LinkMetaData>
 ): { linksToDelete: string[]; jointsToDelete: string[] } => {
   const linksToDelete = findLinksToDeleteWithJoint(jointName, links)
-  
+
   // Find any orphans created by deleting these links (excluding the joint we're already deleting)
   const orphanedJoints = findOrphansAfterMultipleLinkRemovals(linksToDelete, links, [jointName])
-  
+
   return {
     linksToDelete,
     jointsToDelete: [jointName, ...orphanedJoints]
@@ -851,11 +912,11 @@ export const findMergeTarget = (
   threshold: number = MERGE_THRESHOLD
 ): { name: string; position: [number, number]; distance: number } | null => {
   let nearest: { name: string; position: [number, number]; distance: number } | null = null
-  
+
   for (const joint of joints) {
     // Skip the joint being dragged
     if (joint.name === excludeJoint || !joint.position) continue
-    
+
     const distance = calculateDistance(position, joint.position)
     if (distance <= threshold) {
       if (!nearest || distance < nearest.distance) {
@@ -867,7 +928,7 @@ export const findMergeTarget = (
       }
     }
   }
-  
+
   return nearest
 }
 
@@ -890,17 +951,17 @@ export const calculateMergeResult = (
 } => {
   const linksToUpdate: Array<{ linkName: string; oldConnects: string[]; newConnects: string[] }> = []
   const linksToDelete: string[] = []
-  
+
   // Find all links connected to the source joint
   const connectedLinks = getLinksConnectedToJoint(sourceJoint, links)
-  
+
   for (const linkName of connectedLinks) {
     const link = links[linkName]
     if (!link) continue
-    
+
     // Create new connects array with source replaced by target
     const newConnects = link.connects.map(j => j === sourceJoint ? targetJoint : j)
-    
+
     // Check if this creates a self-loop (both ends connect to same joint)
     if (newConnects[0] === newConnects[1]) {
       linksToDelete.push(linkName)
@@ -911,7 +972,7 @@ export const calculateMergeResult = (
         return (meta.connects[0] === newConnects[0] && meta.connects[1] === newConnects[1]) ||
                (meta.connects[0] === newConnects[1] && meta.connects[1] === newConnects[0])
       })
-      
+
       if (existingLink) {
         // This would create a duplicate link, so delete instead
         linksToDelete.push(linkName)
@@ -924,7 +985,7 @@ export const calculateMergeResult = (
       }
     }
   }
-  
+
   return {
     jointToDelete: sourceJoint,
     linksToUpdate,
@@ -946,14 +1007,14 @@ export const getMergeDescription = (
 ): string => {
   const result = calculateMergeResult(sourceJoint, targetJoint, links)
   const parts: string[] = [`Merge ${sourceJoint} → ${targetJoint}`]
-  
+
   if (result.linksToUpdate.length > 0) {
     parts.push(`rewire ${result.linksToUpdate.length} link(s)`)
   }
   if (result.linksToDelete.length > 0) {
     parts.push(`remove ${result.linksToDelete.length} redundant link(s)`)
   }
-  
+
   return parts.join(', ')
 }
 
@@ -973,8 +1034,10 @@ interface FooterToolbarProps {
   measureState?: MeasureState
   groupSelectionState?: GroupSelectionState
   mergePolygonState?: MergePolygonState
+  pathDrawState?: PathDrawState
   canvasWidth?: number
   onCancelAction?: () => void
+  darkMode?: boolean
 }
 
 const getStatusColor = (type: StatusType): string => {
@@ -1008,7 +1071,8 @@ const getToolHint = (
   groupSelectionState?: GroupSelectionState,
   selectedJoints?: string[],
   selectedLinks?: string[],
-  mergePolygonState?: MergePolygonState
+  mergePolygonState?: MergePolygonState,
+  pathDrawState?: PathDrawState
 ): string | null => {
   switch (toolMode) {
     case 'select':
@@ -1056,6 +1120,12 @@ const getToolHint = (
       return 'Select a link or a polygon to begin merge'
     case 'add_joint':
       return 'Click on a link to add a joint'
+    case 'draw_path':
+      if (pathDrawState?.isDrawing) {
+        const pointCount = pathDrawState.points.length
+        return `${pointCount} point(s) • Click to add • Double-click/Enter to finish`
+      }
+      return 'Click to start drawing target path'
     default:
       return null
   }
@@ -1073,21 +1143,25 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
   measureState,
   groupSelectionState,
   mergePolygonState,
+  pathDrawState,
   canvasWidth,
-  onCancelAction
+  onCancelAction,
+  darkMode = false
 }) => {
   const activeTool = TOOLS.find(t => t.id === toolMode)
-  const toolHint = getToolHint(toolMode, linkCreationState, polygonDrawState, measureState, groupSelectionState, selectedJoints, selectedLinks, mergePolygonState)
-  
+  const toolHint = getToolHint(toolMode, linkCreationState, polygonDrawState, measureState, groupSelectionState, selectedJoints, selectedLinks, mergePolygonState, pathDrawState)
+
   // Determine if we should show cancel hint
-  const showCancelHint = statusMessage?.type === 'action' || 
-    linkCreationState.isDrawing || 
-    polygonDrawState?.isDrawing || 
+  const showCancelHint = statusMessage?.type === 'action' ||
+    linkCreationState.isDrawing ||
+    polygonDrawState?.isDrawing ||
     measureState?.isMeasuring ||
-    groupSelectionState?.isSelecting
-  
+    groupSelectionState?.isSelecting ||
+    pathDrawState?.isDrawing
+
   return (
     <Box
+      className="footer-toolbar"
       sx={{
         position: 'fixed',
         bottom: 0,
@@ -1095,33 +1169,34 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
         transform: 'translateX(-50%)',
         width: canvasWidth ? `${canvasWidth}px` : '100%',
         maxWidth: canvasWidth ? `${canvasWidth}px` : '1600px',
-        height: 44,
-        backgroundColor: 'rgba(255, 255, 255, 0.98)',
+        height: 38,
+        backgroundColor: darkMode ? 'rgba(30, 30, 30, 0.98)' : 'rgba(255, 255, 255, 0.98)',
         backdropFilter: 'blur(8px)',
-        borderTop: '1px solid #e0e0e0',
+        borderTop: darkMode ? '1px solid #444' : '1px solid #e0e0e0',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        px: 2,
-        zIndex: 1200
+        px: 1.5,
+        zIndex: 1200,
+        transition: 'background-color 0.25s ease, border-color 0.25s ease'
       }}
     >
       {/* LEFT: Tool indicator + Selection */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 200 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-          <Typography sx={{ fontSize: '1.1rem' }}>{activeTool?.icon}</Typography>
-          <Typography sx={{ fontSize: '0.75rem', fontWeight: 600 }}>
+          <Typography sx={{ fontSize: '1rem', color: darkMode ? '#e0e0e0' : 'inherit' }}>{activeTool?.icon}</Typography>
+          <Typography sx={{ fontSize: '0.7rem', fontWeight: 600, color: darkMode ? '#e0e0e0' : 'inherit' }}>
             {activeTool?.label}
           </Typography>
-          <Typography sx={{ fontSize: '0.6rem', color: 'text.secondary' }}>
+          <Typography sx={{ fontSize: '0.55rem', color: darkMode ? '#888' : 'text.secondary' }}>
             [{activeTool?.shortcut}]
           </Typography>
         </Box>
-        
+
         {(selectedJoints.length > 0 || selectedLinks.length > 0) && (
           <>
-            <Box sx={{ width: '1px', height: 20, backgroundColor: '#e0e0e0' }} />
-            <Typography sx={{ fontSize: '0.75rem' }}>
+            <Box sx={{ width: '1px', height: 18, backgroundColor: darkMode ? '#555' : '#e0e0e0' }} />
+            <Typography sx={{ fontSize: '0.7rem', color: darkMode ? '#ccc' : 'inherit' }}>
               {selectedJoints.length > 1 ? (
                 <span>⬤ <strong>{selectedJoints.length} joints</strong></span>
               ) : selectedJoints.length === 1 ? (
@@ -1137,7 +1212,7 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
           </>
         )}
       </Box>
-      
+
       {/* CENTER: Status message or tool hint */}
       {statusMessage ? (
         <Box
@@ -1145,23 +1220,23 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
             display: 'flex',
             alignItems: 'center',
             gap: 1,
-            px: 2,
-            py: 0.5,
+            px: 1.5,
+            py: 0.25,
             borderRadius: 1,
             backgroundColor: getStatusBgColor(statusMessage.type)
           }}
         >
           <Box
             sx={{
-              width: 6,
-              height: 6,
+              width: 5,
+              height: 5,
               borderRadius: '50%',
               backgroundColor: getStatusColor(statusMessage.type)
             }}
           />
           <Typography
             sx={{
-              fontSize: '0.8rem',
+              fontSize: '0.75rem',
               fontWeight: 500,
               color: getStatusColor(statusMessage.type)
             }}
@@ -1173,8 +1248,8 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
               component="span"
               onClick={onCancelAction}
               sx={{
-                fontSize: '0.7rem',
-                color: 'text.secondary',
+                fontSize: '0.65rem',
+                color: darkMode ? '#888' : 'text.secondary',
                 cursor: 'pointer',
                 ml: 0.5,
                 '&:hover': { textDecoration: 'underline' }
@@ -1190,16 +1265,16 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
             display: 'flex',
             alignItems: 'center',
             gap: 1,
-            px: 2,
-            py: 0.5,
+            px: 1.5,
+            py: 0.25,
             borderRadius: 1,
-            backgroundColor: 'rgba(0, 0, 0, 0.04)'
+            backgroundColor: darkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)'
           }}
         >
           <Typography
             sx={{
-              fontSize: '0.75rem',
-              color: 'text.secondary',
+              fontSize: '0.7rem',
+              color: darkMode ? '#999' : 'text.secondary',
               fontStyle: 'italic'
             }}
           >
@@ -1207,15 +1282,27 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
           </Typography>
         </Box>
       ) : null}
-      
-      {/* RIGHT: Counts */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, minWidth: 150, justifyContent: 'flex-end' }}>
-        <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
-          <strong>{jointCount}</strong> joints
+
+      {/* RIGHT: Counts + Logo */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 180, justifyContent: 'flex-end' }}>
+        <Typography sx={{ fontSize: '0.7rem', color: darkMode ? '#999' : 'text.secondary' }}>
+          <strong style={{ color: darkMode ? '#ccc' : 'inherit' }}>{jointCount}</strong> joints
         </Typography>
-        <Typography sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
-          <strong>{linkCount}</strong> links
+        <Typography sx={{ fontSize: '0.7rem', color: darkMode ? '#999' : 'text.secondary' }}>
+          <strong style={{ color: darkMode ? '#ccc' : 'inherit' }}>{linkCount}</strong> links
         </Typography>
+        <Box sx={{ width: '1px', height: 18, backgroundColor: darkMode ? '#444' : '#e0e0e0' }} />
+        <img
+          src={acinonyxLogo}
+          alt="Acinonyx"
+          className="footer-logo"
+          style={{
+            width: '24px',
+            height: '24px',
+            objectFit: 'contain',
+            borderRadius: '4px'
+          }}
+        />
       </Box>
     </Box>
   )
@@ -1243,20 +1330,20 @@ export const calculateDistance = (p1: [number, number], p2: [number, number]): n
  */
 export const isPointInPolygon = (point: [number, number], polygon: [number, number][]): boolean => {
   if (polygon.length < 3) return false
-  
+
   const [x, y] = point
   let inside = false
-  
+
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
     const [xi, yi] = polygon[i]
     const [xj, yj] = polygon[j]
-    
+
     // Ray casting: count intersections with polygon edges
     if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
       inside = !inside
     }
   }
-  
+
   return inside
 }
 
@@ -1284,10 +1371,10 @@ export const findNearestJoint = (
   threshold: number = JOINT_SNAP_THRESHOLD
 ): { name: string; position: [number, number]; distance: number } | null => {
   let nearest: { name: string; position: [number, number]; distance: number } | null = null
-  
+
   for (const joint of joints) {
     if (!joint.position) continue
-    
+
     const distance = calculateDistance(position, joint.position)
     if (distance <= threshold) {
       if (!nearest || distance < nearest.distance) {
@@ -1299,7 +1386,7 @@ export const findNearestJoint = (
       }
     }
   }
-  
+
   return nearest
 }
 
@@ -1313,10 +1400,10 @@ export const findNearestLink = (
   threshold: number = JOINT_SNAP_THRESHOLD
 ): { name: string; distance: number } | null => {
   let nearest: { name: string; distance: number } | null = null
-  
+
   for (const link of links) {
     if (!link.start || !link.end) continue
-    
+
     // Calculate point-to-line-segment distance
     const distance = pointToLineSegmentDistance(position, link.start, link.end)
     if (distance <= threshold) {
@@ -1328,7 +1415,7 @@ export const findNearestLink = (
       }
     }
   }
-  
+
   return nearest
 }
 
@@ -1343,23 +1430,23 @@ export const pointToLineSegmentDistance = (
   const [px, py] = point
   const [x1, y1] = lineStart
   const [x2, y2] = lineEnd
-  
+
   const dx = x2 - x1
   const dy = y2 - y1
   const lengthSquared = dx * dx + dy * dy
-  
+
   if (lengthSquared === 0) {
     // Line segment is a point
     return calculateDistance(point, lineStart)
   }
-  
+
   // Project point onto line, clamped to segment
   let t = ((px - x1) * dx + (py - y1) * dy) / lengthSquared
   t = Math.max(0, Math.min(1, t))
-  
+
   const closestX = x1 + t * dx
   const closestY = y1 + t * dy
-  
+
   return calculateDistance(point, [closestX, closestY])
 }
 
@@ -1398,5 +1485,671 @@ export const TAB10_COLORS = graphColors
 
 // Get color by index from the graph palette (cycles through colors)
 export const getDefaultColor = (index: number): string => graphColors[index % graphColors.length]
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// JOINT EDIT MODAL - Modal dialog for editing joint properties
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface JointData {
+  name: string
+  type: 'Static' | 'Crank' | 'Revolute'
+  position: [number, number] | null
+  // Type-specific data
+  parentJoint?: string      // For Crank/Revolute
+  parentJoint2?: string     // For Revolute (second parent)
+  distance?: number         // For Crank/Revolute
+  distance2?: number        // For Revolute (second distance)
+  angle?: number            // For Crank
+  // Computed/display data
+  mechanismGroup?: string
+  connectedLinks?: string[]
+  showPath?: boolean
+}
+
+export interface JointEditModalProps {
+  open: boolean
+  onClose: () => void
+  jointData: JointData | null
+  jointTypes: readonly string[]
+  onRename: (oldName: string, newName: string) => void
+  onTypeChange: (jointName: string, newType: string) => void
+  onShowPathChange?: (jointName: string, showPath: boolean) => void
+  darkMode?: boolean
+}
+
+export const JointEditModal: React.FC<JointEditModalProps> = ({
+  open,
+  onClose,
+  jointData,
+  jointTypes,
+  onRename,
+  onTypeChange,
+  onShowPathChange,
+  darkMode = false
+}) => {
+  const [editedName, setEditedName] = useState('')
+  const [hasNameError, setHasNameError] = useState(false)
+
+  // Reset edited name when modal opens with new data
+  useEffect(() => {
+    if (jointData) {
+      setEditedName(jointData.name)
+      setHasNameError(false)
+    }
+  }, [jointData])
+
+  if (!jointData) return null
+
+  const typeColor = jointData.type === 'Static'
+    ? jointColors.static
+    : jointData.type === 'Crank'
+      ? jointColors.crank
+      : jointColors.pivot
+
+  const handleNameSubmit = () => {
+    const trimmedName = editedName.trim()
+    if (trimmedName && trimmedName !== jointData.name) {
+      onRename(jointData.name, trimmedName)
+    }
+  }
+
+  const modalStyle = {
+    position: 'absolute' as const,
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: 380,
+    bgcolor: darkMode ? '#2a2a2a' : '#fff',
+    color: darkMode ? '#f5f5f5' : '#333',
+    borderRadius: 3,
+    boxShadow: 24,
+    p: 0,
+    outline: 'none'
+  }
+
+  return (
+    <Modal open={open} onClose={onClose}>
+      <Box sx={modalStyle}>
+        {/* Header */}
+        <Box sx={{
+          p: 2,
+          borderBottom: `3px solid ${typeColor}`,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          bgcolor: darkMode ? '#333' : '#fafafa'
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Box sx={{
+              width: 12, height: 12, borderRadius: '50%',
+              bgcolor: typeColor,
+              boxShadow: `0 0 8px ${typeColor}80`
+            }} />
+            <Typography variant="h6" sx={{ fontWeight: 600, fontSize: '1rem' }}>
+              Edit Joint
+            </Typography>
+            <Chip
+              label={jointData.type}
+              size="small"
+              sx={{
+                height: 20,
+                fontSize: '0.65rem',
+                bgcolor: `${typeColor}20`,
+                color: typeColor,
+                fontWeight: 600
+              }}
+            />
+          </Box>
+          <IconButton size="small" onClick={onClose} sx={{ color: darkMode ? '#aaa' : '#666' }}>
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </Box>
+
+        {/* Content */}
+        <Box sx={{ p: 2.5 }}>
+          {/* Editable Properties */}
+          <Typography variant="overline" sx={{
+            color: darkMode ? '#888' : 'text.secondary',
+            fontSize: '0.65rem',
+            letterSpacing: 1
+          }}>
+            Editable Properties
+          </Typography>
+
+          <Box sx={{ mt: 1.5, mb: 2.5 }}>
+            <TextField
+              size="small"
+              label="Name"
+              value={editedName}
+              onChange={(e) => {
+                setEditedName(e.target.value)
+                setHasNameError(!e.target.value.trim())
+              }}
+              onBlur={handleNameSubmit}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleNameSubmit()
+                  ;(e.target as HTMLInputElement).blur()
+                }
+              }}
+              error={hasNameError}
+              helperText={hasNameError ? 'Name is required' : ''}
+              fullWidth
+              sx={{
+                mb: 2,
+                '& .MuiInputBase-input': { fontSize: '0.85rem' },
+                '& .MuiInputLabel-root': { fontSize: '0.8rem' }
+              }}
+            />
+
+            <FormControl size="small" fullWidth sx={{ mb: 2 }}>
+              <InputLabel sx={{ fontSize: '0.8rem' }}>Type</InputLabel>
+              <Select
+                value={jointData.type}
+                label="Type"
+                onChange={(e) => onTypeChange(jointData.name, e.target.value)}
+                sx={{ fontSize: '0.85rem' }}
+              >
+                {jointTypes.map(t => (
+                  <MenuItem key={t} value={t} sx={{ fontSize: '0.85rem' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Box sx={{
+                        width: 8, height: 8, borderRadius: '50%',
+                        bgcolor: t === 'Static' ? jointColors.static : t === 'Crank' ? jointColors.crank : jointColors.pivot
+                      }} />
+                      {t}
+                    </Box>
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+
+            {/* Show Path toggle for Crank/Revolute */}
+            {(jointData.type === 'Crank' || jointData.type === 'Revolute') && onShowPathChange && (
+              <Box sx={{
+                p: 1.5,
+                bgcolor: darkMode ? '#3a3a3a' : '#f5f5f5',
+                borderRadius: 1
+              }}>
+                <Box sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}>
+                  <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                    Show Trajectory Path
+                  </Typography>
+                  <Button
+                    size="small"
+                    variant={jointData.showPath ? 'contained' : 'outlined'}
+                    onClick={() => onShowPathChange(jointData.name, !jointData.showPath)}
+                    sx={{
+                      minWidth: 60,
+                      fontSize: '0.7rem',
+                      textTransform: 'none',
+                      bgcolor: jointData.showPath ? colors.primary : 'transparent',
+                      borderColor: jointData.showPath ? colors.primary : '#999',
+                      color: jointData.showPath ? '#fff' : (darkMode ? '#ccc' : '#666'),
+                      '&:hover': {
+                        bgcolor: jointData.showPath ? '#e67300' : (darkMode ? '#444' : '#eee')
+                      }
+                    }}
+                  >
+                    {jointData.showPath ? 'On' : 'Off'}
+                  </Button>
+                </Box>
+                <Typography variant="caption" sx={{
+                  display: 'block',
+                  mt: 0.75,
+                  fontSize: '0.65rem',
+                  color: darkMode ? '#777' : '#888',
+                  fontStyle: 'italic'
+                }}>
+                  Note: "Show/Hide All Paths" in the More toolbar controls global path visibility
+                </Typography>
+              </Box>
+            )}
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* Static Properties */}
+          <Typography variant="overline" sx={{
+            color: darkMode ? '#888' : 'text.secondary',
+            fontSize: '0.65rem',
+            letterSpacing: 1
+          }}>
+            Properties (Read-only)
+          </Typography>
+
+          <Box sx={{
+            mt: 1.5,
+            bgcolor: darkMode ? '#333' : '#f8f8f8',
+            borderRadius: 2,
+            p: 1.5,
+            fontSize: '0.8rem'
+          }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+              <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                Position
+              </Typography>
+              <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
+                {jointData.position
+                  ? `(${jointData.position[0].toFixed(2)}, ${jointData.position[1].toFixed(2)})`
+                  : '—'}
+              </Typography>
+            </Box>
+
+            {jointData.type === 'Crank' && (
+              <>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                    Parent Joint
+                  </Typography>
+                  <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                    {jointData.parentJoint || '—'}
+                  </Typography>
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                    Distance
+                  </Typography>
+                  <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
+                    {jointData.distance?.toFixed(2) || '—'}
+                  </Typography>
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                    Angle
+                  </Typography>
+                  <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
+                    {jointData.angle !== undefined ? `${(jointData.angle * 180 / Math.PI).toFixed(1)}°` : '—'}
+                  </Typography>
+                </Box>
+              </>
+            )}
+
+            {jointData.type === 'Revolute' && (
+              <>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                    Parent Joint 1
+                  </Typography>
+                  <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                    {jointData.parentJoint || '—'}
+                  </Typography>
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                    Distance 1
+                  </Typography>
+                  <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
+                    {jointData.distance?.toFixed(2) || '—'}
+                  </Typography>
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                    Parent Joint 2
+                  </Typography>
+                  <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                    {jointData.parentJoint2 || '—'}
+                  </Typography>
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                    Distance 2
+                  </Typography>
+                  <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
+                    {jointData.distance2?.toFixed(2) || '—'}
+                  </Typography>
+                </Box>
+              </>
+            )}
+
+            {jointData.connectedLinks && jointData.connectedLinks.length > 0 && (
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                  Connected Links
+                </Typography>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  {jointData.connectedLinks.join(', ')}
+                </Typography>
+              </Box>
+            )}
+
+            {jointData.mechanismGroup && (
+              <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                  Mechanism Group
+                </Typography>
+                <Chip
+                  label={jointData.mechanismGroup}
+                  size="small"
+                  sx={{ height: 18, fontSize: '0.6rem' }}
+                />
+              </Box>
+            )}
+          </Box>
+        </Box>
+
+        {/* Footer */}
+        <Box sx={{
+          p: 2,
+          borderTop: `1px solid ${darkMode ? '#444' : '#eee'}`,
+          display: 'flex',
+          justifyContent: 'flex-end',
+          gap: 1
+        }}>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={onClose}
+            sx={{
+              textTransform: 'none',
+              bgcolor: colors.primary,
+              '&:hover': { bgcolor: '#e67300' }
+            }}
+          >
+            Done
+          </Button>
+        </Box>
+      </Box>
+    </Modal>
+  )
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LINK EDIT MODAL - Modal dialog for editing link properties
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface LinkData {
+  name: string
+  color: string
+  connects: [string, string]
+  length: number | null
+  isGround?: boolean  // True if this is a ground/anchored link
+  // Computed/display data
+  mechanismGroup?: string
+  jointPositions?: [[number, number] | null, [number, number] | null]
+}
+
+export interface LinkEditModalProps {
+  open: boolean
+  onClose: () => void
+  linkData: LinkData | null
+  onRename: (oldName: string, newName: string) => void
+  onColorChange: (linkName: string, color: string) => void
+  onGroundChange: (linkName: string, isGround: boolean) => void
+  darkMode?: boolean
+}
+
+export const LinkEditModal: React.FC<LinkEditModalProps> = ({
+  open,
+  onClose,
+  linkData,
+  onRename,
+  onColorChange,
+  onGroundChange,
+  darkMode = false
+}) => {
+  const [editedName, setEditedName] = useState('')
+  const [hasNameError, setHasNameError] = useState(false)
+
+  // Reset edited name when modal opens with new data
+  useEffect(() => {
+    if (linkData) {
+      setEditedName(linkData.name)
+      setHasNameError(false)
+    }
+  }, [linkData])
+
+  if (!linkData) return null
+
+  const handleNameSubmit = () => {
+    const trimmedName = editedName.trim()
+    if (trimmedName && trimmedName !== linkData.name) {
+      onRename(linkData.name, trimmedName)
+    }
+  }
+
+  const modalStyle = {
+    position: 'absolute' as const,
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: 380,
+    bgcolor: darkMode ? '#2a2a2a' : '#fff',
+    color: darkMode ? '#f5f5f5' : '#333',
+    borderRadius: 3,
+    boxShadow: 24,
+    p: 0,
+    outline: 'none'
+  }
+
+  return (
+    <Modal open={open} onClose={onClose}>
+      <Box sx={modalStyle}>
+        {/* Header */}
+        <Box sx={{
+          p: 2,
+          borderBottom: `3px solid ${linkData.color}`,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          bgcolor: darkMode ? '#333' : '#fafafa'
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Box sx={{
+              width: 24, height: 4, borderRadius: 2,
+              bgcolor: linkData.color,
+              boxShadow: `0 0 8px ${linkData.color}80`
+            }} />
+            <Typography variant="h6" sx={{ fontWeight: 600, fontSize: '1rem' }}>
+              Edit Link
+            </Typography>
+          </Box>
+          <IconButton size="small" onClick={onClose} sx={{ color: darkMode ? '#aaa' : '#666' }}>
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </Box>
+
+        {/* Content */}
+        <Box sx={{ p: 2.5 }}>
+          {/* Editable Properties */}
+          <Typography variant="overline" sx={{
+            color: darkMode ? '#888' : 'text.secondary',
+            fontSize: '0.65rem',
+            letterSpacing: 1
+          }}>
+            Editable Properties
+          </Typography>
+
+          <Box sx={{ mt: 1.5, mb: 2.5 }}>
+            <TextField
+              size="small"
+              label="Name"
+              value={editedName}
+              onChange={(e) => {
+                setEditedName(e.target.value)
+                setHasNameError(!e.target.value.trim())
+              }}
+              onBlur={handleNameSubmit}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleNameSubmit()
+                  ;(e.target as HTMLInputElement).blur()
+                }
+              }}
+              error={hasNameError}
+              helperText={hasNameError ? 'Name is required' : ''}
+              fullWidth
+              sx={{
+                mb: 2,
+                '& .MuiInputBase-input': { fontSize: '0.85rem' },
+                '& .MuiInputLabel-root': { fontSize: '0.8rem' }
+              }}
+            />
+
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Typography variant="body2" sx={{ fontSize: '0.8rem', color: darkMode ? '#ccc' : 'text.secondary' }}>
+                Color
+              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <input
+                  type="color"
+                  value={linkData.color}
+                  onChange={(e) => onColorChange(linkData.name, e.target.value)}
+                  style={{
+                    width: 40,
+                    height: 28,
+                    border: 'none',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    padding: 0
+                  }}
+                />
+                <Typography variant="caption" sx={{ fontFamily: 'monospace', color: darkMode ? '#999' : '#666' }}>
+                  {linkData.color.toUpperCase()}
+                </Typography>
+              </Box>
+            </Box>
+
+            {/* Ground Link Toggle */}
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={linkData.isGround || false}
+                  onChange={(e) => onGroundChange(linkData.name, e.target.checked)}
+                  size="small"
+                  sx={{
+                    '& .MuiSwitch-switchBase.Mui-checked': {
+                      color: '#7f7f7f',
+                    },
+                    '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
+                      backgroundColor: '#7f7f7f',
+                    },
+                  }}
+                />
+              }
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="body2" sx={{ fontSize: '0.8rem', color: darkMode ? '#ccc' : 'text.secondary' }}>
+                    Ground Link
+                  </Typography>
+                  <Tooltip title="Mark this link as a ground/anchored link. Ground links are rendered with a dashed style and typically connect static (fixed) joints.">
+                    <Typography variant="caption" sx={{ color: darkMode ? '#666' : '#999', cursor: 'help' }}>ⓘ</Typography>
+                  </Tooltip>
+                </Box>
+              }
+              sx={{ mt: 1.5, ml: 0 }}
+            />
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* Static Properties */}
+          <Typography variant="overline" sx={{
+            color: darkMode ? '#888' : 'text.secondary',
+            fontSize: '0.65rem',
+            letterSpacing: 1
+          }}>
+            Properties (Read-only)
+          </Typography>
+
+          <Box sx={{
+            mt: 1.5,
+            bgcolor: darkMode ? '#333' : '#f8f8f8',
+            borderRadius: 2,
+            p: 1.5,
+            fontSize: '0.8rem'
+          }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1.5 }}>
+              <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                Connects
+              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Chip label={linkData.connects[0]} size="small" sx={{ height: 20, fontSize: '0.65rem' }} />
+                <Typography variant="caption" sx={{ color: darkMode ? '#666' : '#999' }}>→</Typography>
+                <Chip label={linkData.connects[1]} size="small" sx={{ height: 20, fontSize: '0.65rem' }} />
+              </Box>
+            </Box>
+
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+              <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                Length
+              </Typography>
+              <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
+                {linkData.length !== null ? linkData.length.toFixed(2) : '—'}
+              </Typography>
+            </Box>
+
+            {linkData.jointPositions && (
+              <>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                    {linkData.connects[0]} Position
+                  </Typography>
+                  <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
+                    {linkData.jointPositions[0]
+                      ? `(${linkData.jointPositions[0][0].toFixed(2)}, ${linkData.jointPositions[0][1].toFixed(2)})`
+                      : '—'}
+                  </Typography>
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                    {linkData.connects[1]} Position
+                  </Typography>
+                  <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
+                    {linkData.jointPositions[1]
+                      ? `(${linkData.jointPositions[1][0].toFixed(2)}, ${linkData.jointPositions[1][1].toFixed(2)})`
+                      : '—'}
+                  </Typography>
+                </Box>
+              </>
+            )}
+
+            {linkData.mechanismGroup && (
+              <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                <Typography variant="caption" sx={{ color: darkMode ? '#999' : 'text.secondary' }}>
+                  Mechanism Group
+                </Typography>
+                <Chip
+                  label={linkData.mechanismGroup}
+                  size="small"
+                  sx={{ height: 18, fontSize: '0.6rem' }}
+                />
+              </Box>
+            )}
+          </Box>
+        </Box>
+
+        {/* Footer */}
+        <Box sx={{
+          p: 2,
+          borderTop: `1px solid ${darkMode ? '#444' : '#eee'}`,
+          display: 'flex',
+          justifyContent: 'flex-end',
+          gap: 1
+        }}>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={onClose}
+            sx={{
+              textTransform: 'none',
+              bgcolor: colors.primary,
+              '&:hover': { bgcolor: '#e67300' }
+            }}
+          >
+            Done
+          </Button>
+        </Box>
+      </Box>
+    </Modal>
+  )
+}
+
 
 export default FooterToolbar

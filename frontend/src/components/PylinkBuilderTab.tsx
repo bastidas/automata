@@ -14,7 +14,6 @@ import {
   FormControl,
   FormControlLabel,
   Switch,
-  InputLabel,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -45,6 +44,10 @@ import {
   initialMoveGroupState,
   MergePolygonState,
   initialMergePolygonState,
+  PathDrawState,
+  initialPathDrawState,
+  TargetPath,
+  createTargetPath,
   findNearestJoint,
   findNearestLink,
   findMergeTarget,
@@ -63,18 +66,26 @@ import {
   DraggableToolbar,
   ToolbarToggleButtons,
   TOOLBAR_CONFIGS,
-  ToolbarPosition
+  ToolbarPosition,
+  JointEditModal,
+  JointData,
+  LinkEditModal,
+  LinkData
 } from './PylinkBuilderTools'
-import { 
-  jointColors, 
+import {
+  jointColors,
   getCyclicColor,
-  ColorCycleType 
+  ColorCycleType
 } from '../theme'
 import {
   useAnimation,
   useSimulation,
   canSimulate
 } from './PylinkAnimateSimulate'
+import {
+  validateLinks,
+  LinkMeta as PylinkLinkMeta
+} from './PylinkLinks'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONFIGURATION CONSTANTS (defaults - actual values are in state for Settings panel)
@@ -141,6 +152,7 @@ interface JointMeta {
 interface LinkMeta {
   color: string
   connects: string[]
+  isGround?: boolean  // True if this is a ground/anchored link (connects static joints)
 }
 
 interface UIMeta {
@@ -163,7 +175,7 @@ const PylinkBuilderTab: React.FC = () => {
   const PIXELS_PER_UNIT = 6
   const CANVAS_MIN_WIDTH_PX = 800
   const CANVAS_MIN_HEIGHT_PX = 500
-  
+
   const pixelsToUnits = (pixels: number) => pixels / PIXELS_PER_UNIT
   const unitsToPixels = (units: number) => units * PIXELS_PER_UNIT
 
@@ -172,11 +184,11 @@ const PylinkBuilderTab: React.FC = () => {
   const [openToolbars, setOpenToolbars] = useState<Set<string>>(new Set(['tools', 'more']))
   const [toolbarPositions, setToolbarPositions] = useState<Record<string, ToolbarPosition>>({})
   const [hoveredTool, setHoveredTool] = useState<ToolMode | null>(null)
-  
-  // Edit mode state
-  const [editingLink, setEditingLink] = useState<string | null>(null)
-  const [editingJoint, setEditingJoint] = useState<string | null>(null)
-  
+
+  // Edit modal state - holds data for the modal dialogs
+  const [editingJointData, setEditingJointData] = useState<JointData | null>(null)
+  const [editingLinkData, setEditingLinkData] = useState<LinkData | null>(null)
+
   // Document state - using pylink native format
   const [pylinkDoc, setPylinkDoc] = useState<PylinkDocument>({
     name: 'untitled',
@@ -190,55 +202,99 @@ const PylinkBuilderTab: React.FC = () => {
       links: {}
     }
   })
-  
+
   // UI state
   const [selectedJoints, setSelectedJoints] = useState<string[]>([])
   const [selectedLinks, setSelectedLinks] = useState<string[]>([])
   const [hoveredJoint, setHoveredJoint] = useState<string | null>(null)
   const [hoveredLink, setHoveredLink] = useState<string | null>(null)
-  
+
   // Status message system
   const [statusMessage, setStatusMessage] = useState<StatusMessage | null>(null)
-  
+
   // Link creation state
   const [linkCreationState, setLinkCreationState] = useState<LinkCreationState>(initialLinkCreationState)
   const [previewLine, setPreviewLine] = useState<{ start: [number, number]; end: [number, number] } | null>(null)
-  
+
   // Drag state for move/merge functionality
   const [dragState, setDragState] = useState<DragState>(initialDragState)
-  
+
   // Group selection state (for box selection)
   const [groupSelectionState, setGroupSelectionState] = useState<GroupSelectionState>(initialGroupSelectionState)
-  
+
   // Polygon drawing state
   const [polygonDrawState, setPolygonDrawState] = useState<PolygonDrawState>(initialPolygonDrawState)
-  
+
   // Measure tool state
   const [measureState, setMeasureState] = useState<MeasureState>(initialMeasureState)
   const [measurementMarkers, setMeasurementMarkers] = useState<MeasurementMarker[]>([])
-  
+
   // Merge polygon state (for merging polygons with links)
   const [mergePolygonState, setMergePolygonState] = useState<MergePolygonState>(initialMergePolygonState)
-  
+
+  // Target path drawing state (for trajectory optimization)
+  const [pathDrawState, setPathDrawState] = useState<PathDrawState>(initialPathDrawState)
+  const [targetPaths, setTargetPaths] = useState<TargetPath[]>([])
+  const [selectedPathId, setSelectedPathId] = useState<string | null>(null)
+
+  // Optimization state
+  const [isOptimizing, setIsOptimizing] = useState(false)
+  const [preOptimizationDoc, setPreOptimizationDoc] = useState<PylinkDocument | null>(null)
+  const [optimizationResult, setOptimizationResult] = useState<{
+    success: boolean
+    initialError: number
+    finalError: number
+    message: string
+    iterations?: number
+    executionTimeMs?: number
+    optimizedDimensions?: Record<string, number>
+    originalDimensions?: Record<string, number>
+  } | null>(null)
+
+  // Optimization hyperparameters
+  const [optMethod, setOptMethod] = useState<'pso' | 'pylinkage' | 'scipy' | 'powell' | 'nelder-mead'>('pylinkage')
+  const [optNParticles, setOptNParticles] = useState(32)
+  const [optIterations, setOptIterations] = useState(512)
+  const [optMaxIterations, setOptMaxIterations] = useState(100)
+  const [optTolerance, setOptTolerance] = useState(1e-6)
+  const [optBoundsFactor, setOptBoundsFactor] = useState(2.0)
+  const [optMinLength, setOptMinLength] = useState(5)
+  const [optVerbose, setOptVerbose] = useState(true)
+
+  // Trajectory preprocessing state
+  const [prepEnableSmooth, setPrepEnableSmooth] = useState(true)
+  const [prepSmoothWindow, setPrepSmoothWindow] = useState(4)
+  const [prepSmoothPolyorder, setPrepSmoothPolyorder] = useState(3)
+  const [prepSmoothMethod, setPrepSmoothMethod] = useState<'savgol' | 'moving_avg' | 'gaussian'>('savgol')
+  const [prepEnableResample, setPrepEnableResample] = useState(true)
+  const [prepTargetNSteps, setPrepTargetNSteps] = useState(DEFAULT_SIMULATION_STEPS)
+  const [prepResampleMethod, setPrepResampleMethod] = useState<'parametric' | 'cubic' | 'linear'>('parametric')
+  const [isPreprocessing, setIsPreprocessing] = useState(false)
+  const [preprocessResult, setPreprocessResult] = useState<{
+    originalPoints: number
+    outputPoints: number
+    analysis: Record<string, unknown>
+  } | null>(null)
+
   // Drawn objects state (polygons, shapes that can be attached to links)
   const [drawnObjects, setDrawnObjects] = useState<DrawnObjectsState>(initialDrawnObjectsState)
-  
+
   // Delete confirmation dialog state
   const [deleteConfirmDialog, setDeleteConfirmDialog] = useState<{
     open: boolean
     joints: string[]
     links: string[]
   }>({ open: false, joints: [], links: [] })
-  
+
   // Move group state (for moving groups of joints and/or DrawnObjects)
   const [moveGroupState, setMoveGroupState] = useState<MoveGroupState>(initialMoveGroupState)
-  
+
   // Simulation state - using hooks from PylinkAnimateSimulate
   const [simulationSteps, setSimulationSteps] = useState(DEFAULT_SIMULATION_STEPS)
   const [simulationStepsInput, setSimulationStepsInput] = useState(String(DEFAULT_SIMULATION_STEPS))  // Local input for debouncing
   const [mechanismVersion, setMechanismVersion] = useState(0)  // Increments on any change
   const [showTrajectory, setShowTrajectory] = useState(true)  // Toggle trajectory visibility
-  
+
   // Settings state (configurable via Settings panel)
   const [autoSimulateDelayMs, setAutoSimulateDelayMs] = useState(DEFAULT_AUTO_SIMULATE_DELAY_MS)
   const [jointMergeRadius, setJointMergeRadius] = useState(DEFAULT_JOINT_MERGE_RADIUS)
@@ -247,26 +303,109 @@ const PylinkBuilderTab: React.FC = () => {
   const [showGrid, setShowGrid] = useState(true)
   const [showJointLabels, setShowJointLabels] = useState(false)
   const [showLinkLabels, setShowLinkLabels] = useState(false)
-  
+
   // Canvas/Visualization settings
   const [canvasBgColor, setCanvasBgColor] = useState<'default' | 'white' | 'cream' | 'dark'>('default')
-  const [jointSize, setJointSize] = useState(8)  // 3-8px
-  const [linkThickness, setLinkThickness] = useState(3)  // 1-5px
+  const [jointSize, setJointSize] = useState(8)  // 3-16px
+  const [linkThickness, setLinkThickness] = useState(8)  // 1-16px
   const [trajectoryDotSize, setTrajectoryDotSize] = useState(4)  // 2-6px
   const [selectionHighlightColor, setSelectionHighlightColor] = useState<'blue' | 'orange' | 'green' | 'purple'>('blue')
   const [showMeasurementUnits, setShowMeasurementUnits] = useState(true)
   const [trajectoryStyle, setTrajectoryStyle] = useState<'dots' | 'line' | 'both'>('both')
-  
+
   // Derived selection color
   const selectionColorMap = { blue: '#1976d2', orange: '#FA8112', green: '#2e7d32', purple: '#9c27b0' }
   const selectionColor = selectionColorMap[selectionHighlightColor]
-  
+
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // HIGHLIGHT HELPER - Creates consistent glow/outline effects for selected objects
+  // ═══════════════════════════════════════════════════════════════════════════════
+  type HighlightType = 'none' | 'selected' | 'hovered' | 'move_group' | 'merge'
+  type ObjectType = 'joint' | 'link' | 'polygon'
+
+  /**
+   * Get glow filter ID based on color - maps colors to pre-defined SVG filters
+   * Objects glow in their own original color, not the selection color
+   */
+  const getGlowFilterForColor = useCallback((color: string): string => {
+    const colorLower = color.toLowerCase()
+
+    // Joint type colors
+    if (colorLower === '#e74c3c' || colorLower === jointColors.static.toLowerCase()) return 'url(#glow-static)'
+    if (colorLower === '#f39c12' || colorLower === jointColors.crank.toLowerCase()) return 'url(#glow-crank)'
+    if (colorLower === '#2196f3' || colorLower === jointColors.pivot.toLowerCase()) return 'url(#glow-pivot)'
+
+    // Graph colors (D3 palette)
+    if (colorLower === '#1f77b4') return 'url(#glow-blue)'
+    if (colorLower === '#ff7f0e') return 'url(#glow-orange)'
+    if (colorLower === '#2ca02c') return 'url(#glow-green)'
+    if (colorLower === '#d62728') return 'url(#glow-red)'
+    if (colorLower === '#9467bd') return 'url(#glow-purple)'
+    if (colorLower === '#8c564b') return 'url(#glow-brown)'
+    if (colorLower === '#e377c2') return 'url(#glow-pink)'
+    if (colorLower === '#7f7f7f') return 'url(#glow-gray)'
+    if (colorLower === '#bcbd22') return 'url(#glow-olive)'
+    if (colorLower === '#17becf') return 'url(#glow-cyan)'
+
+    // Default to blue glow for unknown colors
+    return 'url(#glow-blue)'
+  }, [])
+
+  /**
+   * Get highlight styling for objects (joints, links, polygons)
+   * Objects glow in their ORIGINAL color when selected/hovered
+   * Move group uses grey glow
+   */
+  const getHighlightStyle = useCallback((
+    objectType: ObjectType,
+    highlightType: HighlightType,
+    baseColor: string,  // The object's original color (for glow)
+    baseStrokeWidth: number
+  ): { stroke: string; strokeWidth: number; filter?: string } => {
+    // No highlight - return base styling
+    if (highlightType === 'none') {
+      return { stroke: baseColor, strokeWidth: baseStrokeWidth }
+    }
+
+    // Different stroke widths based on object type and highlight state
+    const glowStrokeWidth = objectType === 'joint'
+      ? baseStrokeWidth + 1
+      : objectType === 'link'
+        ? baseStrokeWidth + 2
+        : baseStrokeWidth + 1
+
+    // Move group and merge use special colors, selected/hovered use object's original color
+    switch (highlightType) {
+      case 'move_group':
+        return {
+          stroke: jointColors.moveGroup,
+          strokeWidth: glowStrokeWidth,
+          filter: 'url(#glow-movegroup)'
+        }
+      case 'merge':
+        return {
+          stroke: jointColors.mergeHighlight,
+          strokeWidth: glowStrokeWidth,
+          filter: 'url(#glow-merge)'
+        }
+      case 'selected':
+      case 'hovered':
+      default:
+        // Glow in the object's original color
+        return {
+          stroke: baseColor,
+          strokeWidth: glowStrokeWidth,
+          filter: getGlowFilterForColor(baseColor)
+        }
+    }
+  }, [getGlowFilterForColor])
+
   // Canvas dimensions
   const [canvasDimensions, setCanvasDimensions] = useState({ width: 1200, height: 700 })
-  
+
   const canvasRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  
+
   // Animation: positions override during playback
   const [animatedPositions, setAnimatedPositions] = useState<Record<string, [number, number]> | null>(null)
 
@@ -281,7 +420,7 @@ const PylinkBuilderTab: React.FC = () => {
         })
       }
     }
-    
+
     updateDimensions()
     window.addEventListener('resize', updateDimensions)
     return () => window.removeEventListener('resize', updateDimensions)
@@ -300,7 +439,7 @@ const PylinkBuilderTab: React.FC = () => {
   const simulationStepsInputRef = useRef(simulationStepsInput)
   simulationStepsInputRef.current = simulationStepsInput
   const prevSimulationStepsRef = useRef(simulationSteps)
-  
+
   useEffect(() => {
     const timer = setTimeout(() => {
       const val = parseInt(simulationStepsInputRef.current)
@@ -318,7 +457,7 @@ const PylinkBuilderTab: React.FC = () => {
     }, 500)
     return () => clearTimeout(timer)
   }, [simulationStepsInput])
-  
+
   // Trigger simulation when simulationSteps changes (after debounce)
   useEffect(() => {
     if (simulationSteps !== prevSimulationStepsRef.current) {
@@ -331,7 +470,7 @@ const PylinkBuilderTab: React.FC = () => {
   // Helper to show status messages
   const showStatus = useCallback((text: string, type: StatusType = 'info', duration?: number) => {
     setStatusMessage({ text, type, timestamp: Date.now() })
-    
+
     if (duration && type !== 'action') {
       setTimeout(() => {
         setStatusMessage(prev => {
@@ -357,7 +496,7 @@ const PylinkBuilderTab: React.FC = () => {
     // This will be called by the animation hook when the frame changes
     // We update animatedPositions in the useEffect below
   }, [])
-  
+
   // Simulation hook - handles trajectory computation and auto-simulate
   const {
     isSimulating,
@@ -374,7 +513,7 @@ const PylinkBuilderTab: React.FC = () => {
     mechanismVersion,
     showStatus
   })
-  
+
   // Animation hook - handles playback of simulation frames
   const {
     animationState,
@@ -390,7 +529,7 @@ const PylinkBuilderTab: React.FC = () => {
     onFrameChange: handleAnimationFrameChange,
     frameIntervalMs: 50  // 20fps default
   })
-  
+
   // Update animated positions when animation frame changes
   useEffect(() => {
     if (animationState.isAnimating) {
@@ -401,6 +540,57 @@ const PylinkBuilderTab: React.FC = () => {
       setAnimatedPositions(null)
     }
   }, [animationState.isAnimating, animationState.currentFrame, getAnimatedPositions])
+
+  // Track invalid links that would stretch during animation
+  const [stretchingLinks, setStretchingLinks] = useState<string[]>([])
+
+  // Validate links after simulation completes - detect links that would stretch
+  useEffect(() => {
+    if (trajectoryData && trajectoryData.trajectories) {
+      // Convert local LinkMeta format to PylinkLinkMeta format for validation
+      const linksForValidation: Record<string, PylinkLinkMeta> = {}
+      for (const [name, link] of Object.entries(pylinkDoc.meta.links)) {
+        if (link.connects && link.connects.length === 2) {
+          linksForValidation[name] = {
+            color: link.color,
+            connects: [link.connects[0], link.connects[1]] as [string, string],
+            isGround: link.isGround
+          }
+        }
+      }
+
+      const validation = validateLinks(
+        linksForValidation,
+        trajectoryData.jointTypes,
+        trajectoryData.trajectories
+      )
+
+      if (!validation.valid) {
+        // Store problematic links
+        const problemLinkNames = validation.problems.map(p => p.linkName)
+        setStretchingLinks(problemLinkNames)
+
+        // Show warning for each problematic link
+        const problemLinksStr = problemLinkNames.join(', ')
+        showStatus(
+          `⚠️ Invalid mechanism: ${problemLinksStr} would stretch during animation. ` +
+          `These links connect moving joints to fixed joints without proper constraints.`,
+          'warning',
+          5000
+        )
+        console.warn('Link validation problems:', validation.problems)
+
+        // Stop any running animation - can't animate invalid mechanism
+        if (animationState.isAnimating) {
+          pauseAnimation()
+        }
+      } else {
+        setStretchingLinks([])
+      }
+    } else {
+      setStretchingLinks([])
+    }
+  }, [trajectoryData, pylinkDoc.meta.links, showStatus, animationState.isAnimating, pauseAnimation])
 
   // Cancel current action
   const cancelAction = useCallback(() => {
@@ -431,13 +621,17 @@ const PylinkBuilderTab: React.FC = () => {
       setSelectedLinks([])
       showStatus('Merge cancelled', 'info', 2000)
     }
+    if (pathDrawState.isDrawing) {
+      setPathDrawState(initialPathDrawState)
+      showStatus('Path drawing cancelled', 'info', 2000)
+    }
     setToolMode('select')
-  }, [linkCreationState.isDrawing, dragState.isDragging, groupSelectionState.isSelecting, polygonDrawState.isDrawing, measureState.isMeasuring, mergePolygonState.step, showStatus])
+  }, [linkCreationState.isDrawing, dragState.isDragging, groupSelectionState.isSelecting, polygonDrawState.isDrawing, measureState.isMeasuring, mergePolygonState.step, pathDrawState.isDrawing, showStatus])
 
   // Get joints connected to a given joint via visual links
   // This is used to determine the correct parent joints for Revolute type conversion
   const getConnectedJointsFromLinks = useCallback((
-    jointName: string, 
+    jointName: string,
     links: Record<string, { color: string; connects: string[] }>
   ): string[] => {
     const connected: string[] = []
@@ -455,7 +649,7 @@ const PylinkBuilderTab: React.FC = () => {
   }, [])
 
   // Get visual position for any joint
-  // SINGLE SOURCE OF TRUTH: 
+  // SINGLE SOURCE OF TRUTH:
   // - Static joints: position from pylinkage data (x, y)
   // - Crank/Revolute joints: position from meta.joints (x, y) if available,
   //   otherwise calculate from parent relationships
@@ -464,21 +658,21 @@ const PylinkBuilderTab: React.FC = () => {
     if (animatedPositions && animatedPositions[jointName]) {
       return animatedPositions[jointName]
     }
-    
+
     const joint = pylinkDoc.pylinkage.joints.find(j => j.name === jointName)
     if (!joint) return null
-    
+
     // For Static joints, always use the stored x, y
     if (joint.type === 'Static') {
       return [joint.x, joint.y]
     }
-    
+
     // For non-Static joints, check meta.joints first (single source of truth for UI position)
     const meta = pylinkDoc.meta.joints[jointName]
     if (meta?.x !== undefined && meta?.y !== undefined) {
       return [meta.x, meta.y]
     }
-    
+
     // Fallback: calculate position from parent relationships (for initial load/demo)
     if (joint.type === 'Crank') {
       const parent = pylinkDoc.pylinkage.joints.find(j => j.name === joint.joint0.ref)
@@ -501,7 +695,7 @@ const PylinkBuilderTab: React.FC = () => {
           const dx = pos1[0] - pos0[0]
           const dy = pos1[1] - pos0[1]
           const d = Math.sqrt(dx * dx + dy * dy)
-          
+
           if (d > 0 && d <= d0 + d1 && d >= Math.abs(d0 - d1)) {
             // Valid triangle, compute intersection point
             const a = (d0 * d0 - d1 * d1 + d * d) / (2 * d)
@@ -529,6 +723,98 @@ const PylinkBuilderTab: React.FC = () => {
     }))
   }, [pylinkDoc.pylinkage.joints, getJointPosition])
 
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // MODAL DATA BUILDERS - Create data for edit modals
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Build JointData for the joint edit modal
+   */
+  const buildJointData = useCallback((jointName: string): JointData | null => {
+    const joint = pylinkDoc.pylinkage.joints.find(j => j.name === jointName)
+    if (!joint) return null
+
+    const position = getJointPosition(jointName)
+    const meta = pylinkDoc.meta.joints[jointName]
+
+    // Find connected links
+    const connectedLinks = Object.entries(pylinkDoc.meta.links)
+      .filter(([_, linkMeta]) => linkMeta.connects.includes(jointName))
+      .map(([linkName]) => linkName)
+
+    const baseData: JointData = {
+      name: joint.name,
+      type: joint.type,
+      position,
+      connectedLinks,
+      showPath: meta?.show_path ?? false
+    }
+
+    // Add type-specific data
+    if (joint.type === 'Crank') {
+      return {
+        ...baseData,
+        parentJoint: joint.joint0.ref,
+        distance: joint.distance,
+        angle: joint.angle
+      }
+    } else if (joint.type === 'Revolute') {
+      return {
+        ...baseData,
+        parentJoint: joint.joint0.ref,
+        parentJoint2: joint.joint1.ref,
+        distance: joint.distance0,
+        distance2: joint.distance1
+      }
+    }
+
+    return baseData
+  }, [pylinkDoc.pylinkage.joints, pylinkDoc.meta.joints, pylinkDoc.meta.links, getJointPosition])
+
+  /**
+   * Build LinkData for the link edit modal
+   */
+  const buildLinkData = useCallback((linkName: string): LinkData | null => {
+    const linkMeta = pylinkDoc.meta.links[linkName]
+    if (!linkMeta || linkMeta.connects.length < 2) return null
+
+    const pos0 = getJointPosition(linkMeta.connects[0])
+    const pos1 = getJointPosition(linkMeta.connects[1])
+    const length = pos0 && pos1 ? calculateDistance(pos0, pos1) : null
+
+    // Get link index for default color
+    const linkIndex = Object.keys(pylinkDoc.meta.links).indexOf(linkName)
+
+    return {
+      name: linkName,
+      color: linkMeta.color || getDefaultColor(linkIndex),
+      connects: [linkMeta.connects[0], linkMeta.connects[1]],
+      length,
+      isGround: linkMeta.isGround || false,
+      jointPositions: [pos0, pos1]
+    }
+  }, [pylinkDoc.meta.links, getJointPosition])
+
+  /**
+   * Open joint edit modal
+   */
+  const openJointEditModal = useCallback((jointName: string) => {
+    const data = buildJointData(jointName)
+    if (data) {
+      setEditingJointData(data)
+    }
+  }, [buildJointData])
+
+  /**
+   * Open link edit modal
+   */
+  const openLinkEditModal = useCallback((linkName: string) => {
+    const data = buildLinkData(linkName)
+    if (data) {
+      setEditingLinkData(data)
+    }
+  }, [buildLinkData])
+
   // Get all links with their positions for snapping
   const getLinksWithPositions = useCallback(() => {
     return Object.entries(pylinkDoc.meta.links).map(([name, meta]) => {
@@ -551,7 +837,7 @@ const PylinkBuilderTab: React.FC = () => {
         startPositions[jointName] = pos
       }
     })
-    
+
     // Store original positions of all drawn object points
     const drawnObjectStartPositions: Record<string, [number, number][]> = {}
     drawnObjectIds.forEach(id => {
@@ -560,7 +846,7 @@ const PylinkBuilderTab: React.FC = () => {
         drawnObjectStartPositions[id] = [...obj.points]
       }
     })
-    
+
     setMoveGroupState({
       isActive: true,
       isDragging: false,
@@ -570,7 +856,7 @@ const PylinkBuilderTab: React.FC = () => {
       drawnObjectStartPositions,
       dragStartPoint: null
     })
-    
+
     const totalItems = jointNames.length + drawnObjectIds.length
     showStatus(`Move mode: ${totalItems} items selected — click and drag to move`, 'action')
   }, [getJointPosition, drawnObjects.objects, showStatus])
@@ -585,7 +871,7 @@ const PylinkBuilderTab: React.FC = () => {
   // Delete a link and any orphan joints
   const deleteLink = useCallback((linkName: string) => {
     const result = calculateLinkDeletionResult(linkName, pylinkDoc.meta.links)
-    
+
     // Create new state
     const newLinks = { ...pylinkDoc.meta.links }
     const newJoints = { ...pylinkDoc.meta.joints }
@@ -595,19 +881,19 @@ const PylinkBuilderTab: React.FC = () => {
     const newSolveOrder = pylinkDoc.pylinkage.solve_order.filter(
       name => !result.jointsToDelete.includes(name)
     )
-    
+
     // Remove the link
     delete newLinks[linkName]
-    
+
     // Remove orphan joint metadata
     result.jointsToDelete.forEach(jointName => {
       delete newJoints[jointName]
     })
-    
+
     // Clear trajectory and trigger auto-simulation
     clearTrajectory()
     triggerMechanismChange()
-    
+
     setPylinkDoc({
       ...pylinkDoc,
       pylinkage: {
@@ -620,13 +906,13 @@ const PylinkBuilderTab: React.FC = () => {
         links: newLinks
       }
     })
-    
+
     // Clear selections
     setSelectedLinks([])
     setSelectedJoints([])
-    
-    const orphanMsg = result.jointsToDelete.length > 0 
-      ? ` + ${result.jointsToDelete.length} orphan(s)` 
+
+    const orphanMsg = result.jointsToDelete.length > 0
+      ? ` + ${result.jointsToDelete.length} orphan(s)`
       : ''
     showStatus(`Deleted ${linkName}${orphanMsg}`, 'success', 2500)
   }, [pylinkDoc, showStatus])
@@ -634,7 +920,7 @@ const PylinkBuilderTab: React.FC = () => {
   // Delete a joint and all connected links (one degree out), plus any resulting orphans
   const deleteJoint = useCallback((jointName: string) => {
     const result = calculateJointDeletionResult(jointName, pylinkDoc.meta.links)
-    
+
     // Create new state - filter out all joints to be deleted (including orphans)
     const newLinks = { ...pylinkDoc.meta.links }
     const newJoints = { ...pylinkDoc.meta.joints }
@@ -644,21 +930,21 @@ const PylinkBuilderTab: React.FC = () => {
     const newSolveOrder = pylinkDoc.pylinkage.solve_order.filter(
       name => !result.jointsToDelete.includes(name)
     )
-    
+
     // Remove all connected links
     result.linksToDelete.forEach(linkName => {
       delete newLinks[linkName]
     })
-    
+
     // Remove all joint metadata (including orphans)
     result.jointsToDelete.forEach(jName => {
       delete newJoints[jName]
     })
-    
+
     // Clear trajectory and trigger auto-simulation
     clearTrajectory()
     triggerMechanismChange()
-    
+
     setPylinkDoc({
       ...pylinkDoc,
       pylinkage: {
@@ -671,11 +957,11 @@ const PylinkBuilderTab: React.FC = () => {
         links: newLinks
       }
     })
-    
+
     // Clear selections
     setSelectedLinks([])
     setSelectedJoints([])
-    
+
     // Build status message (result.jointsToDelete includes the original joint + orphans)
     const orphanCount = result.jointsToDelete.length - 1
     const parts: string[] = [`Deleted ${jointName}`]
@@ -692,11 +978,11 @@ const PylinkBuilderTab: React.FC = () => {
   const moveJoint = useCallback((jointName: string, newPosition: [number, number]) => {
     const jointIndex = pylinkDoc.pylinkage.joints.findIndex(j => j.name === jointName)
     if (jointIndex === -1) return
-    
+
     const currentJoint = pylinkDoc.pylinkage.joints[jointIndex]
     const newJoints = [...pylinkDoc.pylinkage.joints]
     const newMetaJoints = { ...pylinkDoc.meta.joints }
-    
+
     if (currentJoint.type === 'Static') {
       // Static joints: update position directly in pylinkage data
       newJoints[jointIndex] = {
@@ -725,10 +1011,10 @@ const PylinkBuilderTab: React.FC = () => {
           angle: currentJoint.angle  // Keep original rotation speed
         } as CrankJoint
         // Update meta position for UI rendering (this determines initial position)
-        newMetaJoints[jointName] = { 
-          ...newMetaJoints[jointName] || { color: '', zlevel: 0 }, 
-          x: newPosition[0], 
-          y: newPosition[1] 
+        newMetaJoints[jointName] = {
+          ...newMetaJoints[jointName] || { color: '', zlevel: 0 },
+          x: newPosition[0],
+          y: newPosition[1]
         }
       }
     } else if (currentJoint.type === 'Revolute') {
@@ -749,18 +1035,18 @@ const PylinkBuilderTab: React.FC = () => {
           distance1: distance1
         } as RevoluteJoint
         // Update meta position for UI rendering
-        newMetaJoints[jointName] = { 
-          ...newMetaJoints[jointName] || { color: '', zlevel: 0 }, 
-          x: newPosition[0], 
-          y: newPosition[1] 
+        newMetaJoints[jointName] = {
+          ...newMetaJoints[jointName] || { color: '', zlevel: 0 },
+          x: newPosition[0],
+          y: newPosition[1]
         }
       }
     }
-    
+
     // Clear trajectory and trigger auto-simulation if enabled
     clearTrajectory()
     triggerMechanismChange()
-    
+
     setPylinkDoc({
       ...pylinkDoc,
       pylinkage: {
@@ -797,22 +1083,22 @@ const PylinkBuilderTab: React.FC = () => {
     dy: number
   ) => {
     if (jointNames.length === 0) return
-    
+
     const newJoints = [...pylinkDoc.pylinkage.joints]
     const newMetaJoints = { ...pylinkDoc.meta.joints }
-    
+
     for (const jointName of jointNames) {
       const originalPos = originalPositions[jointName]
       if (!originalPos) continue
-      
+
       const targetX = originalPos[0] + dx
       const targetY = originalPos[1] + dy
-      
+
       const jointIndex = newJoints.findIndex(j => j.name === jointName)
       if (jointIndex === -1) continue
-      
+
       const currentJoint = newJoints[jointIndex]
-      
+
       if (currentJoint.type === 'Static') {
         // Static joints: set x, y directly in pylinkage data
         newJoints[jointIndex] = {
@@ -843,7 +1129,7 @@ const PylinkBuilderTab: React.FC = () => {
         // Joint structure (distance0, distance1, joint0, joint1 refs) stays unchanged
       }
     }
-    
+
     setPylinkDoc(prev => ({
       ...prev,
       pylinkage: {
@@ -860,7 +1146,7 @@ const PylinkBuilderTab: React.FC = () => {
   // Merge two joints together (source is absorbed into target)
   const mergeJoints = useCallback((sourceJoint: string, targetJoint: string) => {
     const result = calculateMergeResult(sourceJoint, targetJoint, pylinkDoc.meta.links)
-    
+
     // Update links to point to target instead of source
     const newLinks = { ...pylinkDoc.meta.links }
     for (const update of result.linksToUpdate) {
@@ -869,22 +1155,22 @@ const PylinkBuilderTab: React.FC = () => {
         connects: update.newConnects
       }
     }
-    
+
     // Delete redundant links (self-loops and duplicates)
     for (const linkName of result.linksToDelete) {
       delete newLinks[linkName]
     }
-    
+
     // Remove the source joint
     const newPylinkageJoints = pylinkDoc.pylinkage.joints.filter(j => j.name !== sourceJoint)
     const newSolveOrder = pylinkDoc.pylinkage.solve_order.filter(name => name !== sourceJoint)
     const newJointsMeta = { ...pylinkDoc.meta.joints }
     delete newJointsMeta[sourceJoint]
-    
+
     // Clear trajectory and trigger auto-simulation
     clearTrajectory()
     triggerMechanismChange()
-    
+
     setPylinkDoc({
       ...pylinkDoc,
       pylinkage: {
@@ -897,7 +1183,7 @@ const PylinkBuilderTab: React.FC = () => {
         links: newLinks
       }
     })
-    
+
     setSelectedJoints([targetJoint])
     showStatus(`Merged ${sourceJoint} into ${targetJoint}`, 'success', 2500)
   }, [pylinkDoc, showStatus, triggerMechanismChange])
@@ -912,10 +1198,10 @@ const PylinkBuilderTab: React.FC = () => {
   ) => {
     const existingJointNames = pylinkDoc.pylinkage.joints.map(j => j.name)
     const existingLinkNames = Object.keys(pylinkDoc.meta.links)
-    
+
     let actualStartJoint = startJointName
     let actualEndJoint = endJointName
-    
+
     // Create start joint if needed
     if (!actualStartJoint) {
       actualStartJoint = generateJointName(existingJointNames)
@@ -928,7 +1214,7 @@ const PylinkBuilderTab: React.FC = () => {
       pylinkDoc.pylinkage.joints.push(newJoint)
       existingJointNames.push(actualStartJoint)
     }
-    
+
     // Create end joint if needed
     if (!actualEndJoint) {
       actualEndJoint = generateJointName(existingJointNames)
@@ -940,17 +1226,17 @@ const PylinkBuilderTab: React.FC = () => {
       }
       pylinkDoc.pylinkage.joints.push(newJoint)
     }
-    
+
     // Create the link
     const linkName = generateLinkName(existingLinkNames)
     const linkColor = getDefaultColor(existingLinkNames.length)
-    
+
     const newMeta = { ...pylinkDoc.meta }
     newMeta.links[linkName] = {
       color: linkColor,
       connects: [actualStartJoint, actualEndJoint]
     }
-    
+
     // Update solve order
     const newSolveOrder = [...pylinkDoc.pylinkage.solve_order]
     if (!newSolveOrder.includes(actualStartJoint)) {
@@ -959,11 +1245,11 @@ const PylinkBuilderTab: React.FC = () => {
     if (!newSolveOrder.includes(actualEndJoint)) {
       newSolveOrder.push(actualEndJoint)
     }
-    
+
     // Clear trajectory and trigger auto-simulation
     clearTrajectory()
     triggerMechanismChange()
-    
+
     setPylinkDoc({
       ...pylinkDoc,
       pylinkage: {
@@ -973,10 +1259,10 @@ const PylinkBuilderTab: React.FC = () => {
       },
       meta: newMeta
     })
-    
+
     const length = calculateDistance(startPoint, endPoint)
     showStatus(`Created ${linkName} (${length.toFixed(1)} units)`, 'success', 2500)
-    
+
     return linkName
   }, [pylinkDoc, showStatus, triggerMechanismChange])
 
@@ -1015,42 +1301,42 @@ const PylinkBuilderTab: React.FC = () => {
     const existingLinkNames = Object.keys(pylinkDoc.meta.links)
     let newJoints = [...pylinkDoc.pylinkage.joints]
     const newMetaJoints = { ...pylinkDoc.meta.joints }
-    
+
     let actualStartJoint = startJointName
     let actualEndJoint = endJointName
-    
+
     // Create start joint if user didn't click on an existing joint
     if (!actualStartJoint) {
       actualStartJoint = generateJointName(existingJointNames)
-      
+
       // Check if we can make this a Revolute joint:
       // - The other end (endJointName) must be an existing joint that user clicked on
       // - That joint must have connections to other joints (via existing links)
       // - At least one of those connected joints should be usable as a reference
       let madeRevolute = false
-      
+
       if (endJointName) {
         // User clicked on an existing joint for the end - check if we can make start a Revolute
         const endJoint = pylinkDoc.pylinkage.joints.find(j => j.name === endJointName)
-        
+
         if (endJoint && endJoint.type !== 'Static') {
           // End joint is non-static, find another joint connected to it
           const connectedToEnd = findConnectedJoints(endJointName)
-          
+
           // Find a suitable second reference joint (preferably non-static, or any if needed)
           const secondRef = connectedToEnd.find(j => {
             const joint = pylinkDoc.pylinkage.joints.find(jj => jj.name === j)
             return joint && joint.type !== 'Static'
           }) || connectedToEnd[0]
-          
+
           if (secondRef) {
             const endPos = getJointPositionForCreate(endJointName)
             const secondPos = getJointPositionForCreate(secondRef)
-            
+
             if (endPos && secondPos) {
               const distance0 = calculateDistance(endPos, startPoint)
               const distance1 = calculateDistance(secondPos, startPoint)
-              
+
               const newJoint: RevoluteJoint = {
                 type: 'Revolute',
                 name: actualStartJoint,
@@ -1066,7 +1352,7 @@ const PylinkBuilderTab: React.FC = () => {
           }
         }
       }
-      
+
       // If we couldn't make a Revolute, create as Static
       if (!madeRevolute) {
         const newJoint: StaticJoint = {
@@ -1079,39 +1365,39 @@ const PylinkBuilderTab: React.FC = () => {
       }
       existingJointNames.push(actualStartJoint)
     }
-    
+
     // Create end joint if user didn't click on an existing joint
     if (!actualEndJoint) {
       actualEndJoint = generateJointName(existingJointNames)
-      
+
       // Check if we can make this a Revolute joint:
       // - The other end (actualStartJoint) must be an existing joint that user clicked on
       //   OR a joint we just created that connects to the mechanism
       // - That joint must have connections to other joints
       let madeRevolute = false
-      
+
       if (startJointName) {
         // User clicked on an existing joint for the start - check if we can make end a Revolute
         const startJoint = pylinkDoc.pylinkage.joints.find(j => j.name === startJointName)
-        
+
         if (startJoint && startJoint.type !== 'Static') {
           // Start joint is non-static, find another joint connected to it
           const connectedToStart = findConnectedJoints(startJointName)
-          
+
           // Find a suitable second reference joint
           const secondRef = connectedToStart.find(j => {
             const joint = pylinkDoc.pylinkage.joints.find(jj => jj.name === j)
             return joint && joint.type !== 'Static'
           }) || connectedToStart[0]
-          
+
           if (secondRef) {
             const startPos = getJointPositionForCreate(startJointName)
             const secondPos = getJointPositionForCreate(secondRef)
-            
+
             if (startPos && secondPos) {
               const distance0 = calculateDistance(startPos, endPoint)
               const distance1 = calculateDistance(secondPos, endPoint)
-              
+
               const newJoint: RevoluteJoint = {
                 type: 'Revolute',
                 name: actualEndJoint,
@@ -1127,7 +1413,7 @@ const PylinkBuilderTab: React.FC = () => {
           }
         }
       }
-      
+
       // If we couldn't make a Revolute, create as Static
       if (!madeRevolute) {
         const newJoint: StaticJoint = {
@@ -1139,17 +1425,98 @@ const PylinkBuilderTab: React.FC = () => {
         newJoints.push(newJoint)
       }
     }
-    
+
+    // IMPORTANT: Handle case where both joints already exist - ensure kinematic constraint
+    // If one joint is Static and one is kinematic (Crank/Revolute), we need to either:
+    // 1. Convert the Static to a Revolute (making it move with the mechanism)
+    // 2. Or warn that this creates an over-constrained mechanism
+    if (startJointName && endJointName) {
+      const startJoint = newJoints.find(j => j.name === startJointName)
+      const endJoint = newJoints.find(j => j.name === endJointName)
+
+      if (startJoint && endJoint) {
+        const startIsStatic = startJoint.type === 'Static'
+        const endIsStatic = endJoint.type === 'Static'
+        const startIsKinematic = startJoint.type === 'Crank' || startJoint.type === 'Revolute'
+        const endIsKinematic = endJoint.type === 'Crank' || endJoint.type === 'Revolute'
+
+        // Case: Static joint connected to kinematic joint - convert Static to Revolute
+        if ((startIsStatic && endIsKinematic) || (endIsStatic && startIsKinematic)) {
+          const staticJointName = startIsStatic ? startJointName : endJointName
+          const kinematicJointName = startIsStatic ? endJointName : startJointName
+          const staticJoint = startIsStatic ? startJoint : endJoint
+
+          // Find another joint connected to the kinematic joint to serve as second reference
+          const connectedToKinematic = findConnectedJoints(kinematicJointName)
+          const secondRef = connectedToKinematic.find(j => j !== staticJointName) ||
+                          // Or use any joint from the mechanism
+                          pylinkDoc.pylinkage.joints.find(j =>
+                            j.name !== staticJointName &&
+                            j.name !== kinematicJointName &&
+                            (j.type === 'Static' || j.type === 'Crank' || j.type === 'Revolute')
+                          )?.name
+
+          if (secondRef) {
+            const kinematicPos = getJointPositionForCreate(kinematicJointName)
+            const secondPos = getJointPositionForCreate(secondRef)
+            const staticPos: [number, number] = [
+              (staticJoint as StaticJoint).x,
+              (staticJoint as StaticJoint).y
+            ]
+
+            if (kinematicPos && secondPos) {
+              const distance0 = calculateDistance(kinematicPos, staticPos)
+              const distance1 = calculateDistance(secondPos, staticPos)
+
+              // Convert Static to Revolute
+              const newRevoluteJoint: RevoluteJoint = {
+                type: 'Revolute',
+                name: staticJointName,
+                joint0: { ref: kinematicJointName },
+                joint1: { ref: secondRef },
+                distance0,
+                distance1
+              }
+
+              // Replace the Static joint with the Revolute
+              const staticIndex = newJoints.findIndex(j => j.name === staticJointName)
+              if (staticIndex >= 0) {
+                newJoints[staticIndex] = newRevoluteJoint
+                // Add to meta if not already there
+                if (!newMetaJoints[staticJointName]) {
+                  newMetaJoints[staticJointName] = {
+                    color: '',
+                    zlevel: 0,
+                    x: staticPos[0],
+                    y: staticPos[1],
+                    show_path: true
+                  }
+                }
+                showStatus(`Converted ${staticJointName} to Revolute joint`, 'info', 2000)
+              }
+            }
+          } else {
+            // Can't find second reference - warn user
+            showStatus(
+              `⚠️ Warning: Link connects kinematic to static joint without proper constraint. Mechanism may be invalid.`,
+              'warning',
+              4000
+            )
+          }
+        }
+      }
+    }
+
     // Create the link
     const linkName = generateLinkName(existingLinkNames)
     const linkColor = getDefaultColor(existingLinkNames.length)
-    
+
     const newMetaLinks = { ...pylinkDoc.meta.links }
     newMetaLinks[linkName] = {
       color: linkColor,
       connects: [actualStartJoint, actualEndJoint]
     }
-    
+
     // Update solve order
     const newSolveOrder = [...pylinkDoc.pylinkage.solve_order]
     if (!newSolveOrder.includes(actualStartJoint)) {
@@ -1158,11 +1525,11 @@ const PylinkBuilderTab: React.FC = () => {
     if (!newSolveOrder.includes(actualEndJoint)) {
       newSolveOrder.push(actualEndJoint)
     }
-    
+
     // Clear trajectory and trigger auto-simulation
     clearTrajectory()
     triggerMechanismChange()
-    
+
     setPylinkDoc({
       ...pylinkDoc,
       pylinkage: {
@@ -1176,24 +1543,24 @@ const PylinkBuilderTab: React.FC = () => {
         links: newMetaLinks
       }
     })
-    
+
     const length = calculateDistance(startPoint, endPoint)
     showStatus(`Created ${linkName} (${length.toFixed(1)} units)`, 'success', 2500)
-    
+
     return linkName
-  }, [pylinkDoc, showStatus, triggerMechanismChange])
+  }, [pylinkDoc, showStatus, triggerMechanismChange, findConnectedJoints, getJointPositionForCreate])
 
   // Handle mouse down on canvas (for drag start)
   const handleCanvasMouseDown = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
     if (!canvasRef.current) return
-    
+
     const rect = canvasRef.current.getBoundingClientRect()
     const pixelX = event.clientX - rect.left
     const pixelY = event.clientY - rect.top
     const x = pixelsToUnits(pixelX)
     const y = pixelsToUnits(pixelY)
     const clickPoint: [number, number] = [x, y]
-    
+
     // Handle group select mode - start box selection
     if (toolMode === 'group_select') {
       setGroupSelectionState({
@@ -1204,47 +1571,47 @@ const PylinkBuilderTab: React.FC = () => {
       showStatus('Drag to select multiple elements', 'action')
       return
     }
-    
+
     // Handle move group mode - start dragging
     if (moveGroupState.isActive && moveGroupState.joints.length > 0) {
       // Check multiple ways the user might be clicking on the selection:
       // 1. Directly on a joint in the move group
       // 2. On a link connecting joints in the move group
       // 3. Within the bounding box of the selection (more lenient)
-      
+
       const jointsWithPositions = getJointsWithPositions()
       const linksWithPositions = getLinksWithPositions()
       const nearestJoint = findNearestJoint(clickPoint, jointsWithPositions)
       const nearestLink = findNearestLink(clickPoint, linksWithPositions)
-      
+
       // Check 1: Click directly on a joint in the move group
       const clickedOnJoint = nearestJoint && moveGroupState.joints.includes(nearestJoint.name)
-      
+
       // Check 2: Click on a link where BOTH endpoints are in the move group
       const clickedOnGroupLink = nearestLink && (() => {
         const linkMeta = pylinkDoc.meta.links[nearestLink.name]
         if (!linkMeta) return false
         return linkMeta.connects.every(j => moveGroupState.joints.includes(j))
       })()
-      
+
       // Check 3: Click within the bounding box of all selected joints (with padding)
       const BBOX_PADDING = 0.5  // Units of padding around the bounding box
       const clickedInBoundingBox = (() => {
         const positions = moveGroupState.joints
           .map(jointName => getJointPosition(jointName))
           .filter((pos): pos is [number, number] => pos !== null)
-        
+
         if (positions.length === 0) return false
-        
+
         const minX = Math.min(...positions.map(p => p[0])) - BBOX_PADDING
         const maxX = Math.max(...positions.map(p => p[0])) + BBOX_PADDING
         const minY = Math.min(...positions.map(p => p[1])) - BBOX_PADDING
         const maxY = Math.max(...positions.map(p => p[1])) + BBOX_PADDING
-        
-        return clickPoint[0] >= minX && clickPoint[0] <= maxX && 
+
+        return clickPoint[0] >= minX && clickPoint[0] <= maxX &&
                clickPoint[1] >= minY && clickPoint[1] <= maxY
       })()
-      
+
       // Check 4: Click on a selected drawn object
       const clickedOnDrawnObj = moveGroupState.drawnObjectIds.some(id => {
         const obj = drawnObjects.objects.find(o => o.id === id)
@@ -1253,10 +1620,10 @@ const PylinkBuilderTab: React.FC = () => {
         const maxX = Math.max(...obj.points.map(p => p[0]))
         const minY = Math.min(...obj.points.map(p => p[1]))
         const maxY = Math.max(...obj.points.map(p => p[1]))
-        return clickPoint[0] >= minX && clickPoint[0] <= maxX && 
+        return clickPoint[0] >= minX && clickPoint[0] <= maxX &&
                clickPoint[1] >= minY && clickPoint[1] <= maxY
       })
-      
+
       if (clickedOnJoint || clickedOnGroupLink || clickedInBoundingBox || clickedOnDrawnObj) {
         setMoveGroupState(prev => ({
           ...prev,
@@ -1272,12 +1639,12 @@ const PylinkBuilderTab: React.FC = () => {
         return  // Important: return to prevent other handlers from running
       }
     }
-    
+
     // Handle select mode - drag joints
     if (toolMode === 'select') {
     const jointsWithPositions = getJointsWithPositions()
     const nearestJoint = findNearestJoint(clickPoint, jointsWithPositions)
-    
+
     if (nearestJoint) {
       // Start dragging
       setDragState({
@@ -1298,21 +1665,21 @@ const PylinkBuilderTab: React.FC = () => {
   // Handle mouse move on canvas
   const handleCanvasMouseMove = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
     if (!canvasRef.current) return
-    
+
     const rect = canvasRef.current.getBoundingClientRect()
     const pixelX = event.clientX - rect.left
     const pixelY = event.clientY - rect.top
     const x = pixelsToUnits(pixelX)
     const y = pixelsToUnits(pixelY)
     const currentPoint: [number, number] = [x, y]
-    
+
     // Handle group selection box preview
     if (groupSelectionState.isSelecting && groupSelectionState.startPoint) {
       setGroupSelectionState(prev => ({
         ...prev,
         currentPoint
       }))
-      
+
       // Preview what would be selected
       const jointsWithPositions = getJointsWithPositions()
       const linksWithPositions = getLinksWithPositions()
@@ -1326,26 +1693,26 @@ const PylinkBuilderTab: React.FC = () => {
       showStatus(`Selecting ${preview.joints.length} joints, ${preview.links.length} links`, 'action')
       return
     }
-    
+
     // Handle link creation preview
     if (linkCreationState.isDrawing) {
       const jointsWithPositions = getJointsWithPositions()
       const nearestJoint = findNearestJoint(currentPoint, jointsWithPositions)
       const endPoint: [number, number] = nearestJoint?.position || currentPoint
-      
+
       setPreviewLine({
         start: linkCreationState.startPoint!,
         end: endPoint
       })
       return
     }
-    
+
     // Handle move group dragging (multiple joints and/or drawn objects)
     // Uses rigid body translation to preserve mechanism structure
     if (moveGroupState.isDragging && moveGroupState.dragStartPoint) {
       const dx = currentPoint[0] - moveGroupState.dragStartPoint[0]
       const dy = currentPoint[1] - moveGroupState.dragStartPoint[1]
-      
+
       // Use rigid body translation - moves from ORIGINAL positions by delta
       // This preserves all distances and angles in the mechanism
       translateGroupRigid(
@@ -1354,7 +1721,7 @@ const PylinkBuilderTab: React.FC = () => {
         dx,
         dy
       )
-      
+
       // Move all drawn objects by the delta (from their original positions)
       if (moveGroupState.drawnObjectIds.length > 0) {
         setDrawnObjects(prev => ({
@@ -1373,17 +1740,17 @@ const PylinkBuilderTab: React.FC = () => {
           })
         }))
       }
-      
+
       const totalItems = moveGroupState.joints.length + moveGroupState.drawnObjectIds.length
       showStatus(`Moving ${totalItems} items (Δ${dx.toFixed(1)}, ${dy.toFixed(1)})`, 'action')
       return
     }
-    
+
     // Handle dragging single joint
     if (dragState.isDragging && dragState.draggedJoint) {
       const jointsWithPositions = getJointsWithPositions()
       const mergeTarget = findMergeTarget(currentPoint, jointsWithPositions, dragState.draggedJoint, jointMergeRadius)
-      
+
       if (mergeTarget) {
         // Near a merge target
         setDragState(prev => ({
@@ -1403,7 +1770,7 @@ const PylinkBuilderTab: React.FC = () => {
         }))
         showStatus(`Moving ${dragState.draggedJoint} to (${x.toFixed(1)}, ${y.toFixed(1)})`, 'action')
       }
-      
+
       // Update the joint position in real-time
       moveJoint(dragState.draggedJoint, currentPoint)
     }
@@ -1422,7 +1789,7 @@ const PylinkBuilderTab: React.FC = () => {
         y2: groupSelectionState.currentPoint[1]
       }
       const selected = findElementsInBox(box, jointsWithPositions, linksWithPositions)
-      
+
       // Also check for drawn objects in the box
       const drawnObjectsInBox = drawnObjects.objects.filter(obj => {
         // Check if any point of the object is in the box
@@ -1432,20 +1799,20 @@ const PylinkBuilderTab: React.FC = () => {
         const maxY = Math.max(box.y1, box.y2)
         return obj.points.some(p => p[0] >= minX && p[0] <= maxX && p[1] >= minY && p[1] <= maxY)
       }).map(obj => obj.id)
-      
+
       // Also include DrawnObjects merged with selected links
       const mergedDrawnObjects = drawnObjects.objects
         .filter(obj => obj.mergedLinkName && selected.links.includes(obj.mergedLinkName))
         .map(obj => obj.id)
-      
+
       // Combine both - those in box and those merged with selected links
       const allSelectedDrawnObjects = [...new Set([...drawnObjectsInBox, ...mergedDrawnObjects])]
-      
+
       setSelectedJoints(selected.joints)
       setSelectedLinks(selected.links)
       setDrawnObjects(prev => ({ ...prev, selectedIds: allSelectedDrawnObjects }))
       setGroupSelectionState(initialGroupSelectionState)
-      
+
       if (selected.joints.length > 0 || selected.links.length > 0 || allSelectedDrawnObjects.length > 0) {
         // Enter move mode with all selected items
         enterMoveGroupMode(selected.joints, allSelectedDrawnObjects)
@@ -1454,7 +1821,7 @@ const PylinkBuilderTab: React.FC = () => {
       }
       return
     }
-    
+
     // Handle move group drag completion
     if (moveGroupState.isDragging) {
       const totalItems = moveGroupState.joints.length + moveGroupState.drawnObjectIds.length
@@ -1481,10 +1848,10 @@ const PylinkBuilderTab: React.FC = () => {
       triggerMechanismChange()
       return
     }
-    
+
     // Handle single joint drag completion
     if (!dragState.isDragging || !dragState.draggedJoint) return
-    
+
     if (dragState.mergeTarget) {
       // Perform merge
       mergeJoints(dragState.draggedJoint, dragState.mergeTarget)
@@ -1492,7 +1859,7 @@ const PylinkBuilderTab: React.FC = () => {
       // Just moved - show final position
       showStatus(`Moved ${dragState.draggedJoint} to (${dragState.currentPosition[0].toFixed(1)}, ${dragState.currentPosition[1].toFixed(1)})`, 'success', 2000)
     }
-    
+
     setDragState(initialDragState)
   }, [dragState, groupSelectionState, moveGroupState, drawnObjects.objects, getJointPosition, mergeJoints, getJointsWithPositions, getLinksWithPositions, enterMoveGroupMode, showStatus, triggerMechanismChange])
 
@@ -1501,7 +1868,7 @@ const PylinkBuilderTab: React.FC = () => {
     // Calculate all items to remove including orphans
     let allLinksToDelete = new Set(linksToDelete)
     let allJointsToDelete = new Set(jointsToDelete)
-    
+
     // For each joint being deleted, add its connected links
     jointsToDelete.forEach(jointName => {
       Object.entries(pylinkDoc.meta.links).forEach(([linkName, linkMeta]) => {
@@ -1510,20 +1877,20 @@ const PylinkBuilderTab: React.FC = () => {
         }
       })
     })
-    
+
     // For each link being deleted, find orphaned joints
     const remainingLinks = Object.entries(pylinkDoc.meta.links).filter(
       ([name]) => !allLinksToDelete.has(name)
     )
-    
+
     // Find joints that would become orphaned
     pylinkDoc.pylinkage.joints.forEach(joint => {
       if (allJointsToDelete.has(joint.name)) return
-      
-      const hasConnection = remainingLinks.some(([_, meta]) => 
+
+      const hasConnection = remainingLinks.some(([_, meta]) =>
         meta.connects.includes(joint.name)
       )
-      
+
       // If originally selected for deletion via link, and now orphaned, delete it
       if (!hasConnection) {
         // Check if this joint was connected to any deleted link
@@ -1536,7 +1903,7 @@ const PylinkBuilderTab: React.FC = () => {
         }
       }
     })
-    
+
     // Build new state
     const newLinks = Object.fromEntries(
       Object.entries(pylinkDoc.meta.links).filter(([name]) => !allLinksToDelete.has(name))
@@ -1546,7 +1913,7 @@ const PylinkBuilderTab: React.FC = () => {
     const newMetaJoints = Object.fromEntries(
       Object.entries(pylinkDoc.meta.joints).filter(([name]) => !allJointsToDelete.has(name))
     )
-    
+
     // Also delete DrawnObjects that are merged with any deleted link
     const allDrawnObjectsToDelete = new Set(drawnObjectsToDelete)
     drawnObjects.objects.forEach(obj => {
@@ -1554,10 +1921,10 @@ const PylinkBuilderTab: React.FC = () => {
         allDrawnObjectsToDelete.add(obj.id)
       }
     })
-    
+
     // Remove drawn objects
     const newDrawnObjects = drawnObjects.objects.filter(obj => !allDrawnObjectsToDelete.has(obj.id))
-    
+
     // Apply all changes at once
     setPylinkDoc({
       ...pylinkDoc,
@@ -1571,7 +1938,7 @@ const PylinkBuilderTab: React.FC = () => {
         links: newLinks
       }
     })
-    
+
     if (allDrawnObjectsToDelete.size > 0) {
       setDrawnObjects(prev => ({
         ...prev,
@@ -1579,18 +1946,18 @@ const PylinkBuilderTab: React.FC = () => {
         selectedIds: prev.selectedIds.filter(id => !allDrawnObjectsToDelete.has(id))
       }))
     }
-    
+
     // Clear selections and trigger update
     setSelectedJoints([])
     setSelectedLinks([])
     clearTrajectory()
     triggerMechanismChange()
-    
+
     // Exit move mode if active
     if (moveGroupState.isActive) {
       setMoveGroupState(initialMoveGroupState)
     }
-    
+
     return {
       deletedJoints: allJointsToDelete.size,
       deletedLinks: allLinksToDelete.size,
@@ -1601,12 +1968,12 @@ const PylinkBuilderTab: React.FC = () => {
   // Handle delete with confirmation for multiple items
   const handleDeleteSelected = useCallback(() => {
     const totalItems = selectedJoints.length + selectedLinks.length + drawnObjects.selectedIds.length
-    
+
     if (totalItems === 0) {
       showStatus('Nothing selected to delete', 'info', 1500)
       return
     }
-    
+
     if (totalItems > 1) {
       // Show confirmation dialog for multiple items
       setDeleteConfirmDialog({
@@ -1625,12 +1992,25 @@ const PylinkBuilderTab: React.FC = () => {
   const confirmDelete = useCallback(() => {
     const { joints, links } = deleteConfirmDialog
     const drawnObjectIds = drawnObjects.selectedIds
-    
+
     const result = batchDelete(joints, links, drawnObjectIds)
-    
+
     setDeleteConfirmDialog({ open: false, joints: [], links: [] })
     showStatus(`Deleted ${result.deletedJoints} joints, ${result.deletedLinks} links${result.deletedDrawnObjects > 0 ? `, ${result.deletedDrawnObjects} objects` : ''}`, 'success', 2500)
   }, [deleteConfirmDialog, drawnObjects.selectedIds, batchDelete, showStatus])
+
+  // Complete path drawing (called by Enter key or double-click)
+  const completePathDrawing = useCallback(() => {
+    if (pathDrawState.isDrawing && pathDrawState.points.length >= 2) {
+      const newPath = createTargetPath(pathDrawState.points, targetPaths)
+      setTargetPaths(prev => [...prev, newPath])
+      setSelectedPathId(newPath.id)
+      setPathDrawState(initialPathDrawState)
+      showStatus(`Created target path with ${pathDrawState.points.length} points`, 'success', 2500)
+    } else if (pathDrawState.isDrawing) {
+      showStatus('Path needs at least 2 points', 'warning', 2000)
+    }
+  }, [pathDrawState, targetPaths, showStatus])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -1638,13 +2018,20 @@ const PylinkBuilderTab: React.FC = () => {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
         return
       }
-      
+
       // Escape to cancel
       if (event.key === 'Escape') {
         cancelAction()
         return
       }
-      
+
+      // Enter to complete path drawing
+      if (event.key === 'Enter' && pathDrawState.isDrawing) {
+        completePathDrawing()
+        event.preventDefault()
+        return
+      }
+
       // Spacebar to play/pause animation
       if (event.key === ' ' || event.code === 'Space') {
         event.preventDefault()  // Prevent page scroll
@@ -1663,7 +2050,7 @@ const PylinkBuilderTab: React.FC = () => {
         }
         return
       }
-      
+
       // Delete/Backspace/X to delete selected items (with confirmation for multiple)
       // Now also handles DrawnObjects (polygons)
       const hasSelectedItems = selectedJoints.length > 0 || selectedLinks.length > 0 || drawnObjects.selectedIds.length > 0
@@ -1685,7 +2072,7 @@ const PylinkBuilderTab: React.FC = () => {
           return
         }
       }
-      
+
       const key = event.key.toUpperCase()
       const tool = TOOLS.find(t => t.shortcut === key)
       if (tool) {
@@ -1712,12 +2099,18 @@ const PylinkBuilderTab: React.FC = () => {
           setDrawnObjects(prev => ({ ...prev, selectedIds: [] }))
           setSelectedLinks([])
         }
+        // Cancel path drawing if switching tools
+        if (pathDrawState.isDrawing && tool.id !== 'draw_path') {
+          setPathDrawState(initialPathDrawState)
+        }
         setToolMode(tool.id)
-        
+
         // Show appropriate message for merge mode
         if (tool.id === 'merge') {
           setMergePolygonState({ step: 'awaiting_selection', selectedPolygonId: null, selectedLinkName: null })
           showStatus('Select a link or a polygon to begin merge', 'action')
+        } else if (tool.id === 'draw_path') {
+          showStatus('Click to start drawing target path', 'action')
         } else {
           showStatus(`${tool.label} mode`, 'info', 1500)
         }
@@ -1727,27 +2120,27 @@ const PylinkBuilderTab: React.FC = () => {
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [linkCreationState.isDrawing, groupSelectionState.isSelecting, polygonDrawState.isDrawing, measureState.isMeasuring, cancelAction, showStatus, selectedJoints, selectedLinks, handleDeleteSelected, animationState.isAnimating, playAnimation, pauseAnimation, trajectoryData, runSimulation, pylinkDoc.pylinkage.joints])
+  }, [linkCreationState.isDrawing, groupSelectionState.isSelecting, polygonDrawState.isDrawing, measureState.isMeasuring, pathDrawState.isDrawing, cancelAction, showStatus, selectedJoints, selectedLinks, handleDeleteSelected, animationState.isAnimating, playAnimation, pauseAnimation, trajectoryData, runSimulation, pylinkDoc.pylinkage.joints, completePathDrawing])
 
   // Handle canvas click
   const handleCanvasClick = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
     // Don't process click if we just finished dragging or group selecting
     if (dragState.isDragging || groupSelectionState.isSelecting) return
-    
+
     if (!canvasRef.current) return
-    
+
     const rect = canvasRef.current.getBoundingClientRect()
     const pixelX = event.clientX - rect.left
     const pixelY = event.clientY - rect.top
     const x = pixelsToUnits(pixelX)
     const y = pixelsToUnits(pixelY)
     const clickPoint: [number, number] = [x, y]
-    
+
     const jointsWithPositions = getJointsWithPositions()
     const linksWithPositions = getLinksWithPositions()
     const nearestJoint = findNearestJoint(clickPoint, jointsWithPositions)
     const nearestLink = findNearestLink(clickPoint, linksWithPositions)
-    
+
     // Handle mechanism select mode - select and enter move mode
     if (toolMode === 'mechanism_select') {
       // Helper to find DrawnObjects merged with mechanism links
@@ -1756,7 +2149,7 @@ const PylinkBuilderTab: React.FC = () => {
           .filter(obj => obj.mergedLinkName && linkNames.includes(obj.mergedLinkName))
           .map(obj => obj.id)
       }
-      
+
       if (nearestJoint) {
         const mechanism = findConnectedMechanism(nearestJoint.name, pylinkDoc.meta.links)
         setSelectedJoints(mechanism.joints)
@@ -1788,7 +2181,7 @@ const PylinkBuilderTab: React.FC = () => {
       }
       return
     }
-    
+
     // Handle measure mode
     if (toolMode === 'measure') {
       // Snap to existing joint if within MERGE_THRESHOLD
@@ -1796,7 +2189,7 @@ const PylinkBuilderTab: React.FC = () => {
       const snappedX = snappedPoint[0]
       const snappedY = snappedPoint[1]
       const snappedToJoint = nearestJoint ? ` (${nearestJoint.name})` : ''
-      
+
       if (!measureState.isMeasuring) {
         // First click - set start point
         setMeasureState({
@@ -1818,19 +2211,19 @@ const PylinkBuilderTab: React.FC = () => {
         const distance = calculateDistance(startPoint, snappedPoint)
         const dx = snappedPoint[0] - startPoint[0]
         const dy = snappedPoint[1] - startPoint[1]
-        
+
         // Add end marker
         setMeasurementMarkers(prev => [...prev, {
           id: Date.now(),
           point: snappedPoint,
           timestamp: Date.now()
         }])
-        
+
         showStatus(`Distance: ${distance.toFixed(2)} units (Δx: ${dx.toFixed(1)}, Δy: ${dy.toFixed(1)})`, 'success', 5000)
-        
+
         // Reset measurement state
         setMeasureState(initialMeasureState)
-        
+
         // Start fade timer for markers (3 seconds)
         setTimeout(() => {
           setMeasurementMarkers(prev => prev.filter(m => Date.now() - m.timestamp < 3000))
@@ -1838,7 +2231,7 @@ const PylinkBuilderTab: React.FC = () => {
       }
       return
     }
-    
+
     // Handle merge mode - merge polygon with enclosed link (either order works)
     if (toolMode === 'merge') {
       // Helper to check if click is on a polygon (inside or on the stroke/outline)
@@ -1865,35 +2258,35 @@ const PylinkBuilderTab: React.FC = () => {
           return false
         })
       }
-      
+
       // Helper to complete the merge
       const completeMerge = (polygonId: string, linkName: string) => {
         const polygon = drawnObjects.objects.find(obj => obj.id === polygonId)
         const linkMeta = pylinkDoc.meta.links[linkName]
-        
+
         if (!polygon || !linkMeta) {
           showStatus('Error: Could not find polygon or link', 'error', 2000)
           setMergePolygonState(initialMergePolygonState)
           return false
         }
-        
+
         const startPos = getJointPosition(linkMeta.connects[0])
         const endPos = getJointPosition(linkMeta.connects[1])
-        
+
         if (!startPos || !endPos) {
           showStatus('Error: Could not get link endpoint positions', 'error', 2000)
           return false
         }
-        
+
         // Check if both endpoints are inside the polygon
         if (!areLinkEndpointsInPolygon(startPos, endPos, polygon.points)) {
           showStatus(`Link "${linkName}" endpoints are not inside the polygon. Both ends must be enclosed.`, 'warning', 3500)
           return false
         }
-        
+
         // Success! Merge the polygon with the link
         const linkColor = linkMeta.color || getDefaultColor(0)
-        
+
         setDrawnObjects(prev => ({
           ...prev,
           objects: prev.objects.map(obj => {
@@ -1910,12 +2303,12 @@ const PylinkBuilderTab: React.FC = () => {
           }),
           selectedIds: []
         }))
-        
+
         showStatus(`Merged polygon "${polygon.name}" with link "${linkName}"`, 'success', 3000)
         setMergePolygonState(initialMergePolygonState)
         return true
       }
-      
+
       // Initial state: waiting for user to select either a polygon or a link
       // PRIORITY: If clicking near a link, select the link (even if inside a polygon)
       // This allows selecting links that are inside polygons
@@ -1933,7 +2326,7 @@ const PylinkBuilderTab: React.FC = () => {
           showStatus(`Selected link "${nearestLink.name}" — now click a polygon to merge`, 'action')
           return
         }
-        
+
         // No link clicked - check for polygon
         const clickedPolygon = findClickedPolygon()
         if (clickedPolygon) {
@@ -1948,7 +2341,7 @@ const PylinkBuilderTab: React.FC = () => {
           showStatus(`Selected polygon "${clickedPolygon.name}" — now click a link to merge`, 'action')
           return
         }
-        
+
         // Clicked on empty space - check if they clicked on an already-merged polygon
         const mergedPolygon = drawnObjects.objects.find(obj => {
           if (obj.type !== 'polygon' || obj.points.length < 3) return false
@@ -1962,7 +2355,7 @@ const PylinkBuilderTab: React.FC = () => {
         }
         return
       }
-      
+
       // Polygon selected: waiting for link
       if (mergePolygonState.step === 'polygon_selected') {
         // Link takes priority - complete the merge
@@ -1974,7 +2367,7 @@ const PylinkBuilderTab: React.FC = () => {
           }
           return
         }
-        
+
         // No link - check if user clicked a different polygon to switch
         const clickedPolygon = findClickedPolygon()
         if (clickedPolygon && clickedPolygon.id !== mergePolygonState.selectedPolygonId) {
@@ -1991,7 +2384,7 @@ const PylinkBuilderTab: React.FC = () => {
         }
         return
       }
-      
+
       // Link selected: waiting for polygon
       if (mergePolygonState.step === 'link_selected') {
         // First check if user clicked a different link to switch
@@ -2007,7 +2400,7 @@ const PylinkBuilderTab: React.FC = () => {
           showStatus(`Switched to link "${nearestLink.name}" — now click a polygon to merge`, 'action')
           return
         }
-        
+
         // Check for polygon (clicking inside or on edge)
         const clickedPolygon = findClickedPolygon()
         if (clickedPolygon) {
@@ -2018,17 +2411,17 @@ const PylinkBuilderTab: React.FC = () => {
           }
           return
         }
-        
+
         showStatus('Click inside a polygon to merge with the selected link', 'info', 2000)
         return
       }
     }
-    
+
     // Handle draw_polygon mode - creates DrawnObjects only (no joints/links)
     if (toolMode === 'draw_polygon') {
       // Just use click position directly, no snapping to joints for polygons
       const point = clickPoint
-      
+
       if (!polygonDrawState.isDrawing) {
         // First click - start polygon
         setPolygonDrawState({
@@ -2040,7 +2433,7 @@ const PylinkBuilderTab: React.FC = () => {
         // Check if near starting point to close polygon
         const startPoint = polygonDrawState.points[0]
         const distanceToStart = calculateDistance(point, startPoint)
-        
+
         if (distanceToStart <= MERGE_THRESHOLD && polygonDrawState.points.length >= 3) {
           // Close the polygon - create DrawnObject only (no joints/links)
           const polygonPoints = polygonDrawState.points
@@ -2054,7 +2447,7 @@ const PylinkBuilderTab: React.FC = () => {
             objects: [...prev.objects, newDrawnObject],
             selectedIds: [newDrawnObject.id]  // Select the new polygon
           }))
-          
+
           setPolygonDrawState(initialPolygonDrawState)
           showStatus(`Completed ${polygonDrawState.points.length}-sided polygon (${newDrawnObject.id})`, 'success', 2500)
         } else {
@@ -2063,14 +2456,56 @@ const PylinkBuilderTab: React.FC = () => {
             ...prev,
             points: [...prev.points, point]
           }))
-          
+
           const sides = polygonDrawState.points.length
           showStatus(`${sides + 1} points — click near start to close polygon`, 'action')
         }
       }
       return
     }
-    
+
+    // Handle draw_path mode - for trajectory optimization target paths
+    if (toolMode === 'draw_path') {
+      const point = clickPoint
+
+      if (!pathDrawState.isDrawing) {
+        // First click - start path
+        setPathDrawState({
+          isDrawing: true,
+          points: [point]
+        })
+        showStatus('Click to add points. Click near start or double-click to close path.', 'action')
+      } else {
+        // Check if clicking near start point to close the path (need at least 3 points)
+        const startPoint = pathDrawState.points[0]
+        const distanceToStart = calculateDistance(point, startPoint)
+
+        if (distanceToStart <= jointMergeRadius && pathDrawState.points.length >= 3) {
+          // Close the path - don't add the clicked point, just complete with existing points
+          // The path is implicitly closed (last point connects back to first)
+          const newPath = createTargetPath(pathDrawState.points, targetPaths)
+          setTargetPaths(prev => [...prev, newPath])
+          setSelectedPathId(newPath.id)
+          setPathDrawState(initialPathDrawState)
+          showStatus(`Created closed path with ${pathDrawState.points.length} points`, 'success', 2500)
+        } else {
+          // Add new point to path
+          setPathDrawState(prev => ({
+            ...prev,
+            points: [...prev.points, point]
+          }))
+
+          const pointCount = pathDrawState.points.length + 1
+          if (pointCount >= 3) {
+            showStatus(`${pointCount} points — click near start to close, or double-click to finish`, 'action')
+          } else {
+            showStatus(`${pointCount} points — need at least 3 for a path`, 'action')
+          }
+        }
+      }
+      return
+    }
+
     // Handle delete mode
     if (toolMode === 'delete') {
       // If items are selected, delete them
@@ -2078,7 +2513,7 @@ const PylinkBuilderTab: React.FC = () => {
         handleDeleteSelected()
         return
       }
-      
+
       // Otherwise, prioritize joints over links
       if (nearestJoint) {
         deleteJoint(nearestJoint.name)
@@ -2089,21 +2524,21 @@ const PylinkBuilderTab: React.FC = () => {
       }
       return
     }
-    
+
     // Handle draw_link mode
     if (toolMode === 'draw_link') {
       if (!linkCreationState.isDrawing) {
         // First click - start the link
         const startJointName = nearestJoint?.name || null
         const startPoint = nearestJoint?.position || clickPoint
-        
+
         setLinkCreationState({
           isDrawing: true,
           startPoint,
           startJointName,
           endPoint: null
         })
-        
+
         if (startJointName) {
           showStatus(`Drawing from ${startJointName} — click to complete`, 'action')
         } else {
@@ -2113,27 +2548,27 @@ const PylinkBuilderTab: React.FC = () => {
         // Second click - complete the link
         const endJointName = nearestJoint?.name || null
         const endPoint = nearestJoint?.position || clickPoint
-        
+
         // Don't allow connecting a joint to itself
         if (endJointName && endJointName === linkCreationState.startJointName) {
           showStatus('Cannot connect a joint to itself', 'warning', 2000)
           return
         }
-        
+
         createLinkWithRevoluteDefault(
           linkCreationState.startPoint!,
           endPoint,
           linkCreationState.startJointName,
           endJointName
         )
-        
+
         // Reset link creation state
         setLinkCreationState(initialLinkCreationState)
         setPreviewLine(null)
       }
       return
     }
-    
+
     // Handle select mode (only for clicks, not drags)
     if (toolMode === 'select') {
       if (nearestJoint) {
@@ -2150,7 +2585,20 @@ const PylinkBuilderTab: React.FC = () => {
         clearStatus()
       }
     }
-  }, [toolMode, linkCreationState, dragState.isDragging, groupSelectionState.isSelecting, measureState, polygonDrawState, selectedJoints, selectedLinks, getJointsWithPositions, getLinksWithPositions, pylinkDoc.meta.links, pylinkDoc.pylinkage.joints, deleteJoint, deleteLink, handleDeleteSelected, showStatus, clearStatus, triggerMechanismChange, createLinkWithRevoluteDefault])
+  }, [toolMode, linkCreationState, dragState.isDragging, groupSelectionState.isSelecting, measureState, polygonDrawState, pathDrawState, selectedJoints, selectedLinks, getJointsWithPositions, getLinksWithPositions, pylinkDoc.meta.links, pylinkDoc.pylinkage.joints, deleteJoint, deleteLink, handleDeleteSelected, showStatus, clearStatus, triggerMechanismChange, createLinkWithRevoluteDefault])
+
+  // Handle canvas double-click (for completing path drawing)
+  const handleCanvasDoubleClick = useCallback((_event: React.MouseEvent<SVGSVGElement>) => {
+    // Complete path drawing on double-click
+    if (toolMode === 'draw_path' && pathDrawState.isDrawing && pathDrawState.points.length >= 2) {
+      const newPath = createTargetPath(pathDrawState.points, targetPaths)
+      setTargetPaths(prev => [...prev, newPath])
+      setSelectedPathId(newPath.id)
+      setPathDrawState(initialPathDrawState)
+      showStatus(`Created target path with ${pathDrawState.points.length} points`, 'success', 2500)
+      return
+    }
+  }, [toolMode, pathDrawState, targetPaths, showStatus])
 
   // Get cursor style based on tool mode
   const getCursorStyle = () => {
@@ -2161,6 +2609,7 @@ const PylinkBuilderTab: React.FC = () => {
     switch (toolMode) {
       case 'draw_link': return 'crosshair'
       case 'draw_polygon': return 'crosshair'
+      case 'draw_path': return 'crosshair'
       case 'measure': return 'crosshair'
       case 'delete': return 'pointer'
       case 'select': return 'default'
@@ -2175,7 +2624,7 @@ const PylinkBuilderTab: React.FC = () => {
     return pylinkDoc.pylinkage.joints.map((joint, index) => {
       const pos = getJointPosition(joint.name)
       if (!pos) return null
-      
+
       const isSelected = selectedJoints.includes(joint.name)
       const isInMoveGroup = moveGroupState.isActive && moveGroupState.joints.includes(joint.name)
       const isHovered = hoveredJoint === joint.name
@@ -2183,35 +2632,65 @@ const PylinkBuilderTab: React.FC = () => {
       const isMergeTarget = dragState.mergeTarget === joint.name
       const meta = pylinkDoc.meta.joints[joint.name]
       const color = meta?.color || getDefaultColor(index)
-      
+
       const isStatic = joint.type === 'Static'
       const isCrank = joint.type === 'Crank'
-      
-      // Selection colors
-      const moveGroupColor = '#9e9e9e'  // Light grey for move group
-      const mergeColor = '#00bcd4'  // Cyan for merge indication
+
+      // Highlight state flags (must be declared before using them)
       const showMergeHighlight = isMergeTarget || (isDragging && dragState.mergeTarget)
       const showMoveGroupHighlight = isInMoveGroup && !showMergeHighlight
-      
+
+      // Use theme colors for joint fill - keep original colors, selection indicated by glow
+      const staticColor = jointColors.static      // #E74C3C - red for fixed joints
+      const crankColor = jointColors.crank        // #F39C12 - amber for crank joints
+
+      // Joint fill color based on type (NOT changed by selection - selection uses glow)
+      const jointFillColor = isStatic
+        ? staticColor
+        : isCrank
+          ? crankColor
+          : color
+
+      // Determine highlight type for glow effect
+      const highlightType: HighlightType = showMergeHighlight
+        ? 'merge'
+        : showMoveGroupHighlight
+          ? 'move_group'
+          : (isSelected || isDragging)
+            ? 'selected'
+            : isHovered
+              ? 'hovered'
+              : 'none'
+
+      // Get highlight styling - joints glow in their original color
+      const defaultStroke = darkMode ? '#333333' : '#FFFFFF'
+      const highlightStyle = getHighlightStyle('joint', highlightType, jointFillColor, 2)
+
+      // Use the highlight filter, or no filter if not highlighted
+      // Stroke color: use object color for glow, but keep default stroke for the actual outline
+      const strokeColor = highlightType === 'none'
+        ? defaultStroke
+        : highlightType === 'move_group' || highlightType === 'merge'
+          ? highlightStyle.stroke
+          : defaultStroke  // Keep white/dark outline, the glow provides the color
+
       return (
         <g key={joint.name}>
           <circle
             cx={unitsToPixels(pos[0])}
             cy={unitsToPixels(pos[1])}
             r={isDragging ? jointSize * 1.5 : (isHovered || isSelected || isMergeTarget || isInMoveGroup ? jointSize * 1.25 : jointSize)}
-            fill={showMergeHighlight ? mergeColor : (showMoveGroupHighlight ? moveGroupColor : (isStatic ? '#e74c3c' : (isCrank ? '#f39c12' : color)))}
-            stroke={showMergeHighlight ? '#fff' : (showMoveGroupHighlight ? '#666' : (isSelected || isDragging ? '#fff' : '#333'))}
-            strokeWidth={showMergeHighlight ? 3 : (isSelected || isDragging || isInMoveGroup ? 3 : 2)}
+            fill={jointFillColor}
+            stroke={strokeColor}
+            strokeWidth={highlightStyle.strokeWidth}
+            filter={highlightStyle.filter}
             style={{ cursor: moveGroupState.isActive ? 'move' : (toolMode === 'select' ? 'grab' : 'pointer') }}
             onMouseEnter={() => !dragState.isDragging && !moveGroupState.isDragging && setHoveredJoint(joint.name)}
             onMouseLeave={() => setHoveredJoint(null)}
             onDoubleClick={(e) => {
               if (toolMode === 'select') {
                 e.stopPropagation()
-                setEditingJoint(joint.name)
-                if (!openToolbars.has('nodes')) {
-                  setOpenToolbars(prev => new Set([...prev, 'nodes']))
-                }
+                openJointEditModal(joint.name)
               }
             }}
           />
@@ -2223,7 +2702,7 @@ const PylinkBuilderTab: React.FC = () => {
               textAnchor="middle"
               fontSize="11"
               fontWeight={isHovered || isDragging ? 'bold' : 'normal'}
-              fill={showMergeHighlight ? mergeColor : (darkMode ? '#e0e0e0' : '#333')}
+              fill={showMergeHighlight ? jointColors.mergeHighlight : (darkMode ? '#e0e0e0' : '#333')}
               style={{ pointerEvents: 'none' }}
             >
               {joint.name}
@@ -2252,11 +2731,11 @@ const PylinkBuilderTab: React.FC = () => {
   // Render trajectory dots for simulation results
   const renderTrajectories = () => {
     if (!trajectoryData || !showTrajectory) return null
-    
+
     // ─────────────────────────────────────────────────────────────────────────
     // TRAJECTORY COLOR CYCLE
     // ─────────────────────────────────────────────────────────────────────────
-    // This function generates colors for trajectory dots that cycle back to 
+    // This function generates colors for trajectory dots that cycle back to
     // the starting color at the end of the animation. This creates a smooth
     // visual loop where the last dot's color nearly matches the first dot's.
     //
@@ -2272,40 +2751,44 @@ const PylinkBuilderTab: React.FC = () => {
     const getTrajectoryColor = (stepIndex: number, totalSteps: number) => {
       return getCyclicColor(stepIndex, totalSteps, trajectoryColorCycle)
     }
-    
+
     return Object.entries(trajectoryData.trajectories).map(([jointName, positions]) => {
       // Skip if no trajectory data for this joint
       if (!positions || !Array.isArray(positions) || positions.length === 0) {
         return null
       }
-      
+
       // Show trajectories for Revolute and Crank joints (they move during simulation)
       const jointType = trajectoryData.jointTypes?.[jointName]
       if (jointType !== 'Revolute' && jointType !== 'Crank') return null
-      
+
+      // Check if this joint has show_path enabled in meta (per-joint visibility control)
+      const jointMeta = pylinkDoc.meta.joints[jointName]
+      if (jointMeta && jointMeta.show_path === false) return null
+
       // Validate first position exists and has coordinates
       const firstPos = positions[0]
       if (!firstPos || typeof firstPos[0] !== 'number' || typeof firstPos[1] !== 'number') {
         return null
       }
-      
+
       // Check if joint actually moves (has varying positions)
-      const hasMovement = positions.length > 1 && positions.some((pos, i) => 
+      const hasMovement = positions.length > 1 && positions.some((pos, i) =>
         i > 0 && pos && pos[0] !== undefined && pos[1] !== undefined &&
         (Math.abs(pos[0] - firstPos[0]) > 0.001 || Math.abs(pos[1] - firstPos[1]) > 0.001)
       )
-      
+
       // Get color based on joint type for non-moving indicators
       const jointColor = jointType === 'Crank' ? jointColors.crank : jointColors.pivot
-      
+
       // Filter out any invalid positions for rendering
-      const validPositions = positions.filter(pos => 
+      const validPositions = positions.filter(pos =>
         pos && typeof pos[0] === 'number' && typeof pos[1] === 'number' &&
         isFinite(pos[0]) && isFinite(pos[1])
       )
-      
+
       if (validPositions.length === 0) return null
-      
+
       return (
         <g key={`trajectory-${jointName}`}>
           {hasMovement && validPositions.length > 1 ? (
@@ -2315,7 +2798,7 @@ const PylinkBuilderTab: React.FC = () => {
                 <path
                   d={validPositions
                     .filter(pos => pos && pos[0] !== undefined && pos[1] !== undefined)
-                    .map((pos, i) => 
+                    .map((pos, i) =>
                       `${i === 0 ? 'M' : 'L'} ${unitsToPixels(pos[0])} ${unitsToPixels(pos[1])}`
                     ).join(' ')}
                   fill="none"
@@ -2367,28 +2850,55 @@ const PylinkBuilderTab: React.FC = () => {
   // Render links between joints
   const renderLinks = () => {
     const links: JSX.Element[] = []
-    
+
     Object.entries(pylinkDoc.meta.links).forEach(([linkName, linkMeta], index) => {
       if (linkMeta.connects.length < 2) return
-      
+
       const pos0 = getJointPosition(linkMeta.connects[0])
       const pos1 = getJointPosition(linkMeta.connects[1])
-      
+
       if (!pos0 || !pos1) return
-      
+
       const isHovered = hoveredLink === linkName
       const isSelected = selectedLinks.includes(linkName)
       // Check if link's joints are in move group
-      const isInMoveGroup = moveGroupState.isActive && 
+      const isInMoveGroup = moveGroupState.isActive &&
         linkMeta.connects.every(jointName => moveGroupState.joints.includes(jointName))
-      
-      // Light grey for move group selection, otherwise use standard color
-      const strokeColor = isInMoveGroup ? '#9e9e9e' : (isSelected ? '#9e9e9e' : (linkMeta.color || getDefaultColor(index)))
-      
+
+      // Check if this is a ground link
+      const isGroundLink = linkMeta.isGround || false
+
+      // Check if this link would stretch (invalid kinematic constraint)
+      const isStretchingLink = stretchingLinks.includes(linkName)
+
+      // Base link color - stretching links are red, ground links use gray if no custom color
+      const baseLinkColor = isStretchingLink
+        ? '#ff0000'  // Red for invalid/stretching links
+        : isGroundLink && !linkMeta.color
+          ? '#7f7f7f'  // Default gray for ground links
+          : (linkMeta.color || getDefaultColor(index))
+
+      // Determine highlight type for glow effect
+      const linkHighlightType: HighlightType = isInMoveGroup
+        ? 'move_group'
+        : isSelected
+          ? 'selected'
+          : isHovered
+            ? 'hovered'
+            : 'none'
+
+      // Get highlight styling - links glow in their original color
+      const linkHighlightStyle = getHighlightStyle('link', linkHighlightType, baseLinkColor, linkThickness)
+
+      // Ground links are rendered slightly thinner
+      const effectiveStrokeWidth = isGroundLink
+        ? Math.max(linkHighlightStyle.strokeWidth * 0.8, 2)
+        : linkHighlightStyle.strokeWidth
+
       // Calculate midpoint for label
       const midX = (pos0[0] + pos1[0]) / 2
       const midY = (pos0[1] + pos1[1]) / 2
-      
+
       links.push(
         <g key={linkName}>
           <line
@@ -2396,19 +2906,18 @@ const PylinkBuilderTab: React.FC = () => {
             y1={unitsToPixels(pos0[1])}
             x2={unitsToPixels(pos1[0])}
             y2={unitsToPixels(pos1[1])}
-            stroke={strokeColor}
-            strokeWidth={isHovered || isSelected || isInMoveGroup ? linkThickness + 2 : linkThickness}
+            stroke={baseLinkColor}
+            strokeWidth={effectiveStrokeWidth}
             strokeLinecap="round"
+            strokeDasharray={isGroundLink ? '8,4' : undefined}  // Dashed for ground links
+            filter={linkHighlightStyle.filter}
             style={{ cursor: moveGroupState.isActive ? 'move' : 'pointer' }}
             onMouseEnter={() => !moveGroupState.isDragging && setHoveredLink(linkName)}
             onMouseLeave={() => setHoveredLink(null)}
             onDoubleClick={(e) => {
               if (toolMode === 'select') {
                 e.stopPropagation()
-                setEditingLink(linkName)
-                if (!openToolbars.has('links')) {
-                  setOpenToolbars(prev => new Set([...prev, 'links']))
-                }
+                openLinkEditModal(linkName)
               }
             }}
           />
@@ -2431,7 +2940,7 @@ const PylinkBuilderTab: React.FC = () => {
                 textAnchor="middle"
                 fontSize="10"
                 fontWeight={isHovered ? 'bold' : 'normal'}
-                fill={isHovered || isSelected ? strokeColor : (darkMode ? '#b0b0b0' : '#555')}
+                fill={isHovered || isSelected ? baseLinkColor : (darkMode ? '#b0b0b0' : '#555')}
                 style={{ pointerEvents: 'none' }}
               >
                 {linkName}
@@ -2441,7 +2950,7 @@ const PylinkBuilderTab: React.FC = () => {
         </g>
       )
     })
-    
+
     return links
   }
 
@@ -2451,12 +2960,12 @@ const PylinkBuilderTab: React.FC = () => {
     const lines: JSX.Element[] = []
     const maxUnitsX = pixelsToUnits(canvasDimensions.width)
     const maxUnitsY = pixelsToUnits(canvasDimensions.height)
-    
+
     // Get CSS variable values for grid colors (dark mode aware)
     const gridMajorColor = darkMode ? '#444444' : '#dddddd'
     const gridMinorColor = darkMode ? '#333333' : '#eeeeee'
     const gridTextColor = darkMode ? '#666666' : '#999999'
-    
+
     // Major grid every 20 units
     for (let i = 0; i <= Math.ceil(maxUnitsX); i += 20) {
       lines.push(
@@ -2478,7 +2987,7 @@ const PylinkBuilderTab: React.FC = () => {
         )
       }
     }
-    
+
     for (let i = 0; i <= Math.ceil(maxUnitsY); i += 20) {
       lines.push(
         <line
@@ -2499,7 +3008,7 @@ const PylinkBuilderTab: React.FC = () => {
         )
       }
     }
-    
+
     // Minor grid every 10 units
     for (let i = 10; i <= Math.ceil(maxUnitsX); i += 20) {
       lines.push(
@@ -2515,7 +3024,7 @@ const PylinkBuilderTab: React.FC = () => {
         />
       )
     }
-    
+
     for (let i = 10; i <= Math.ceil(maxUnitsY); i += 20) {
       lines.push(
         <line
@@ -2530,14 +3039,14 @@ const PylinkBuilderTab: React.FC = () => {
         />
       )
     }
-    
+
     return lines
   }
 
   // Render preview line during link creation
   const renderPreviewLine = () => {
     if (!previewLine) return null
-    
+
     return (
       <line
         x1={unitsToPixels(previewLine.start[0])}
@@ -2558,17 +3067,17 @@ const PylinkBuilderTab: React.FC = () => {
     if (!groupSelectionState.isSelecting || !groupSelectionState.startPoint || !groupSelectionState.currentPoint) {
       return null
     }
-    
+
     const x1 = unitsToPixels(groupSelectionState.startPoint[0])
     const y1 = unitsToPixels(groupSelectionState.startPoint[1])
     const x2 = unitsToPixels(groupSelectionState.currentPoint[0])
     const y2 = unitsToPixels(groupSelectionState.currentPoint[1])
-    
+
     const minX = Math.min(x1, x2)
     const minY = Math.min(y1, y2)
     const width = Math.abs(x2 - x1)
     const height = Math.abs(y2 - y1)
-    
+
     return (
       <rect
         x={minX}
@@ -2587,24 +3096,35 @@ const PylinkBuilderTab: React.FC = () => {
   // Render completed drawn objects (polygons, shapes)
   const renderDrawnObjects = () => {
     if (drawnObjects.objects.length === 0) return null
-    
+
     return drawnObjects.objects.map(obj => {
       if (obj.type === 'polygon' && obj.points.length >= 3) {
-        const pathData = obj.points.map((p, i) => 
+        const pathData = obj.points.map((p, i) =>
           `${i === 0 ? 'M' : 'L'} ${unitsToPixels(p[0])} ${unitsToPixels(p[1])}`
         ).join(' ') + ' Z'
-        
+
         const isSelected = drawnObjects.selectedIds.includes(obj.id)
         const isInMoveGroup = moveGroupState.isActive && moveGroupState.drawnObjectIds.includes(obj.id)
-        
+
+        // Determine highlight type for glow effect
+        const polygonHighlightType: HighlightType = isInMoveGroup
+          ? 'move_group'
+          : isSelected
+            ? 'selected'
+            : 'none'
+
+        // Get highlight styling - keeps original fill, adds glow outline in object's color
+        const polygonHighlightStyle = getHighlightStyle('polygon', polygonHighlightType, obj.strokeColor, obj.strokeWidth)
+
         return (
           <g key={obj.id}>
             <path
               d={pathData}
-              fill={isInMoveGroup ? '#e0e0e0' : obj.fillColor}
-              stroke={isInMoveGroup ? '#9e9e9e' : (isSelected ? selectionColor : obj.strokeColor)}
-              strokeWidth={isSelected || isInMoveGroup ? obj.strokeWidth + 1 : obj.strokeWidth}
+              fill={obj.fillColor}  // Keep original fill color
+              stroke={obj.strokeColor}  // Keep original stroke color
+              strokeWidth={polygonHighlightStyle.strokeWidth}
               fillOpacity={obj.fillOpacity}
+              filter={polygonHighlightStyle.filter}
               style={{ cursor: moveGroupState.isActive ? 'move' : 'pointer' }}
               onClick={(e) => {
                 // In merge mode, let the canvas handler process this click
@@ -2613,7 +3133,7 @@ const PylinkBuilderTab: React.FC = () => {
                   // Don't stop propagation - let the canvas click handler handle merge logic
                   return
                 }
-                
+
                 e.stopPropagation()
                 // Toggle selection (non-merge mode)
                 setDrawnObjects(prev => ({
@@ -2630,7 +3150,7 @@ const PylinkBuilderTab: React.FC = () => {
                 x={unitsToPixels(obj.points[0][0])}
                 y={unitsToPixels(obj.points[0][1]) - 8}
                 fontSize="10"
-                fill="#1976d2"
+                fill={obj.strokeColor}
                 fontWeight="500"
               >
                 {obj.name}
@@ -2646,9 +3166,9 @@ const PylinkBuilderTab: React.FC = () => {
   // Render polygon preview during drawing
   const renderPolygonPreview = () => {
     if (!polygonDrawState.isDrawing || polygonDrawState.points.length === 0) return null
-    
+
     const points = polygonDrawState.points
-    
+
     // Draw lines between points
     const lines = []
     for (let i = 0; i < points.length - 1; i++) {
@@ -2666,7 +3186,7 @@ const PylinkBuilderTab: React.FC = () => {
         />
       )
     }
-    
+
     // Draw points
     const pointMarkers = points.map((point, i) => (
       <circle
@@ -2680,14 +3200,14 @@ const PylinkBuilderTab: React.FC = () => {
         opacity={0.9}
       />
     ))
-    
+
     // If we have 3+ points, show a preview fill
     let polygonFill = null
     if (points.length >= 3) {
-      const pathData = points.map((p, i) => 
+      const pathData = points.map((p, i) =>
         `${i === 0 ? 'M' : 'L'} ${unitsToPixels(p[0])} ${unitsToPixels(p[1])}`
       ).join(' ') + ' Z'
-      
+
       polygonFill = (
         <path
           d={pathData}
@@ -2697,7 +3217,7 @@ const PylinkBuilderTab: React.FC = () => {
         />
       )
     }
-    
+
     return (
       <g>
         {polygonFill}
@@ -2720,17 +3240,170 @@ const PylinkBuilderTab: React.FC = () => {
     )
   }
 
+  // Render target path preview during drawing
+  const renderPathPreview = () => {
+    if (!pathDrawState.isDrawing || pathDrawState.points.length === 0) return null
+
+    const points = pathDrawState.points
+    const canClose = points.length >= 3
+
+    // Draw lines between points
+    const lines = []
+    for (let i = 0; i < points.length - 1; i++) {
+      lines.push(
+        <line
+          key={`path-line-${i}`}
+          x1={unitsToPixels(points[i][0])}
+          y1={unitsToPixels(points[i][1])}
+          x2={unitsToPixels(points[i + 1][0])}
+          y2={unitsToPixels(points[i + 1][1])}
+          stroke="#e91e63"
+          strokeWidth={3}
+          strokeDasharray="8,4"
+          opacity={0.9}
+        />
+      )
+    }
+
+    // Draw closing line preview (dashed, faded) - shows the path will be closed
+    const closingLine = points.length >= 2 ? (
+      <line
+        key="path-closing-line"
+        x1={unitsToPixels(points[points.length - 1][0])}
+        y1={unitsToPixels(points[points.length - 1][1])}
+        x2={unitsToPixels(points[0][0])}
+        y2={unitsToPixels(points[0][1])}
+        stroke="#e91e63"
+        strokeWidth={2}
+        strokeDasharray="4,8"
+        opacity={0.4}
+      />
+    ) : null
+
+    // Draw snap circle around start point when path can be closed
+    const snapCircle = canClose ? (
+      <circle
+        cx={unitsToPixels(points[0][0])}
+        cy={unitsToPixels(points[0][1])}
+        r={unitsToPixels(jointMergeRadius)}
+        fill="none"
+        stroke="#e91e63"
+        strokeWidth={2}
+        strokeDasharray="4,4"
+        opacity={0.6}
+      />
+    ) : null
+
+    // Draw points
+    const pointMarkers = points.map((point, i) => (
+      <circle
+        key={`path-point-${i}`}
+        cx={unitsToPixels(point[0])}
+        cy={unitsToPixels(point[1])}
+        r={i === 0 ? 8 : 5}
+        fill={i === 0 ? '#e91e63' : '#f48fb1'}
+        stroke="#fff"
+        strokeWidth={2}
+        opacity={0.9}
+      />
+    ))
+
+    return (
+      <g>
+        {closingLine}
+        {lines}
+        {snapCircle}
+        {pointMarkers}
+      </g>
+    )
+  }
+
+  // Render completed target paths (for trajectory optimization)
+  // All target paths are rendered as closed curves (cyclic trajectories)
+  const renderTargetPaths = () => {
+    if (targetPaths.length === 0) return null
+
+    return targetPaths.map(path => {
+      const isSelected = selectedPathId === path.id
+      const points = path.points
+
+      if (points.length < 2) return null
+
+      // Create path data for closed curve (Z closes the path back to start)
+      const pathData = points.map((p, i) =>
+        `${i === 0 ? 'M' : 'L'} ${unitsToPixels(p[0])} ${unitsToPixels(p[1])}`
+      ).join(' ') + ' Z'  // Close the path
+
+      return (
+        <g key={path.id}>
+          {/* Path line - closed shape */}
+          <path
+            d={pathData}
+            fill="none"
+            stroke={path.color}
+            strokeWidth={isSelected ? 4 : 3}
+            strokeDasharray="10,5"
+            opacity={isSelected ? 1 : 0.7}
+            style={{ cursor: 'pointer' }}
+            onClick={(e) => {
+              e.stopPropagation()
+              setSelectedPathId(isSelected ? null : path.id)
+            }}
+          />
+          {/* Path points */}
+          {points.map((point, i) => (
+            <circle
+              key={`${path.id}-point-${i}`}
+              cx={unitsToPixels(point[0])}
+              cy={unitsToPixels(point[1])}
+              r={isSelected ? 5 : 4}
+              fill={path.color}
+              stroke="#fff"
+              strokeWidth={1.5}
+              opacity={isSelected ? 1 : 0.7}
+              style={{ pointerEvents: 'none' }}
+            />
+          ))}
+          {/* Start point indicator (larger) */}
+          <circle
+            cx={unitsToPixels(points[0][0])}
+            cy={unitsToPixels(points[0][1])}
+            r={isSelected ? 7 : 6}
+            fill={path.color}
+            stroke="#fff"
+            strokeWidth={2}
+            opacity={isSelected ? 1 : 0.8}
+            style={{ pointerEvents: 'none' }}
+          />
+          {/* Path label */}
+          {isSelected && points.length > 0 && (
+            <text
+              x={unitsToPixels(points[0][0])}
+              y={unitsToPixels(points[0][1]) - 14}
+              textAnchor="middle"
+              fontSize="11"
+              fontWeight="bold"
+              fill={path.color}
+            >
+              {path.name} (closed)
+            </text>
+          )}
+        </g>
+      )
+    })
+  }
+
   // Render measurement markers (X marks that fade)
   const renderMeasurementMarkers = () => {
     const now = Date.now()
-    
+
     return measurementMarkers.map((marker) => {
       const age = now - marker.timestamp
       const opacity = Math.max(0, 1 - age / 3000) // Fade over 3 seconds
       const size = 8
       const x = unitsToPixels(marker.point[0])
       const y = unitsToPixels(marker.point[1])
-      
+
       return (
         <g key={marker.id} opacity={opacity}>
           {/* X mark */}
@@ -2771,10 +3444,10 @@ const PylinkBuilderTab: React.FC = () => {
   // Render measurement line (if measuring)
   const renderMeasurementLine = () => {
     if (!measureState.isMeasuring || !measureState.startPoint) return null
-    
+
     const startX = unitsToPixels(measureState.startPoint[0])
     const startY = unitsToPixels(measureState.startPoint[1])
-    
+
     return (
       <g>
         {/* Start point indicator */}
@@ -2814,17 +3487,17 @@ const PylinkBuilderTab: React.FC = () => {
     if (toolbarPositions[id]) return toolbarPositions[id]
     const config = TOOLBAR_CONFIGS.find(c => c.id === id)
     const defaultPos = config?.defaultPosition || { x: 100, y: 100 }
-    
+
     // Convert negative x to position from right edge
     if (defaultPos.x < 0) {
-      return { 
-        x: canvasDimensions.width + defaultPos.x, 
-        y: defaultPos.y 
+      return {
+        x: canvasDimensions.width + defaultPos.x,
+        y: defaultPos.y
       }
     }
     return defaultPos
   }
-  
+
   // Get toolbar dimensions based on type
   const getToolbarDimensions = (id: string): { minWidth: number; maxHeight: number } => {
     switch (id) {
@@ -2832,7 +3505,9 @@ const PylinkBuilderTab: React.FC = () => {
         // Tools should NEVER scroll - large maxHeight to fit all content
         return { minWidth: 220, maxHeight: 600 }
       case 'more':
-        return { minWidth: 180, maxHeight: 400 }  // Simplified, shorter now
+        return { minWidth: 180, maxHeight: 350 }  // Simplified, shorter now (optimization moved out)
+      case 'optimize':
+        return { minWidth: 320, maxHeight: 700 }  // Wide for hyperparameters, tall for all controls
       case 'links':
         return { minWidth: 200, maxHeight: 480 }  // 1.5x taller for links list
       case 'nodes':
@@ -2853,12 +3528,12 @@ const PylinkBuilderTab: React.FC = () => {
   const TOOLS_GRID_GAP = 6
   const TOOLS_PADDING = 12
   const TOOLS_BOX_WIDTH = (TOOL_BUTTON_SIZE * 3) + (TOOLS_GRID_GAP * 2) + (TOOLS_PADDING * 2)
-  
+
   const ToolsContent = () => (
     <Box sx={{ p: `${TOOLS_PADDING}px`, width: TOOLS_BOX_WIDTH, boxSizing: 'border-box' }}>
-      <Box sx={{ 
-        display: 'grid', 
-        gridTemplateColumns: `repeat(3, ${TOOL_BUTTON_SIZE}px)`, 
+      <Box sx={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(3, ${TOOL_BUTTON_SIZE}px)`,
         gap: `${TOOLS_GRID_GAP}px`,
         justifyContent: 'center'
       }}>
@@ -2866,7 +3541,7 @@ const PylinkBuilderTab: React.FC = () => {
           const isActive = toolMode === tool.id
           const isHovered = hoveredTool === tool.id
           const isDelete = tool.id === 'delete'
-          
+
           return (
             <Tooltip
               key={tool.id}
@@ -2901,23 +3576,23 @@ const PylinkBuilderTab: React.FC = () => {
                   borderRadius: 2,
                   fontSize: isDelete ? '1.2rem' : '1.5rem',
                   overflow: 'hidden',
-                  backgroundColor: isActive 
-                    ? (isDelete ? '#d32f2f' : 'primary.main') 
+                  backgroundColor: isActive
+                    ? (isDelete ? '#d32f2f' : 'primary.main')
                     : (isHovered ? 'rgba(0,0,0,0.04)' : 'transparent'),
                   color: isActive ? 'white' : (isDelete && isHovered ? '#d32f2f' : 'text.primary'),
                   border: isActive ? 'none' : '1px solid transparent',
                   transition: 'all 0.15s ease',
                   '&:hover': {
-                    backgroundColor: isActive 
-                      ? (isDelete ? '#b71c1c' : 'primary.dark') 
+                    backgroundColor: isActive
+                      ? (isDelete ? '#b71c1c' : 'primary.dark')
                       : (isDelete ? 'rgba(211, 47, 47, 0.08)' : 'rgba(0,0,0,0.06)'),
                     border: isActive ? 'none' : '1px solid rgba(0,0,0,0.12)'
                   }
                 }}
               >
-                <span style={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
+                <span style={{
+                  display: 'flex',
+                  alignItems: 'center',
                   justifyContent: 'center',
                   width: '100%',
                   height: '100%',
@@ -2930,9 +3605,9 @@ const PylinkBuilderTab: React.FC = () => {
           )
         })}
       </Box>
-      
+
       <Divider sx={{ my: 1 }} />
-      
+
       <Box sx={{ px: 0.5 }}>
         <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
           {TOOLS.find(t => t.id === toolMode)?.label}
@@ -2945,7 +3620,7 @@ const PylinkBuilderTab: React.FC = () => {
   )
 
   // Update link property
-  const updateLinkProperty = useCallback((linkName: string, property: string, value: string | string[]) => {
+  const updateLinkProperty = useCallback((linkName: string, property: string, value: string | string[] | boolean) => {
     setPylinkDoc(prev => ({
       ...prev,
       meta: {
@@ -2974,11 +3649,17 @@ const PylinkBuilderTab: React.FC = () => {
       delete newLinks[oldName]
       return { ...prev, meta: { ...prev.meta, links: newLinks } }
     })
-    setEditingLink(newName)
+    // Update the modal data with new name if modal is open
+    if (editingLinkData && editingLinkData.name === oldName) {
+      setEditingLinkData(prev => prev ? { ...prev, name: newName } : null)
+    }
     showStatus(`Renamed to ${newName}`, 'success', 1500)
-  }, [pylinkDoc.meta.links, showStatus])
+  }, [pylinkDoc.meta.links, showStatus, editingLinkData])
 
-  // Links toolbar content
+  // Track click timing for distinguishing single vs double click
+  const linkClickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Links toolbar content - double-click opens edit modal
   const LinksContent = () => (
     <Box sx={{ overflow: 'auto', maxHeight: 350 }}>
       {Object.entries(pylinkDoc.meta.links).length === 0 ? (
@@ -2988,69 +3669,38 @@ const PylinkBuilderTab: React.FC = () => {
         </Box>
       ) : (
         Object.entries(pylinkDoc.meta.links).map(([linkName, linkMeta], index) => {
-          const isEditing = editingLink === linkName
           const pos0 = getJointPosition(linkMeta.connects[0])
           const pos1 = getJointPosition(linkMeta.connects[1])
           const length = pos0 && pos1 ? calculateDistance(pos0, pos1) : null
           const isSelected = selectedLinks.includes(linkName)
-          
-          if (isEditing) {
-            return (
-              <Box key={linkName} sx={{ p: 1.5, borderBottom: '1px solid #eee', backgroundColor: 'rgba(25, 118, 210, 0.05)' }}>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                  <Typography variant="caption" sx={{ fontWeight: 600 }}>Edit Link</Typography>
-                  <Button size="small" onClick={() => setEditingLink(null)} sx={{ minWidth: 'auto', fontSize: '0.7rem' }}>Done</Button>
-                </Box>
-                <TextField
-                  size="small"
-                  label="Name"
-                  defaultValue={linkName}
-                  onBlur={(e) => {
-                    if (e.target.value !== linkName) {
-                      renameLink(linkName, e.target.value)
-                    }
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      const target = e.target as HTMLInputElement
-                      if (target.value !== linkName) {
-                        renameLink(linkName, target.value)
-                      }
-                      target.blur()
-                    }
-                  }}
-                  fullWidth
-                  sx={{ mb: 1, '& .MuiInputBase-input': { fontSize: '0.75rem' } }}
-                />
-                <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
-                  <TextField
-                    size="small"
-                    label="Color"
-                    type="color"
-                    value={linkMeta.color || getDefaultColor(index)}
-                    onChange={(e) => updateLinkProperty(linkName, 'color', e.target.value)}
-                    sx={{ width: 80, '& .MuiInputBase-input': { height: 24, padding: '4px' } }}
-                  />
-                  <Typography variant="caption" sx={{ alignSelf: 'center', color: 'text.secondary' }}>
-                    Length: {length?.toFixed(1) ?? '?'}
-                  </Typography>
-                </Box>
-                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
-                  Connects: {linkMeta.connects.join(' → ')}
-                </Typography>
-              </Box>
-            )
-          }
-          
           const isHovered = hoveredLink === linkName
-          
+
+          const handleClick = (e: React.MouseEvent) => {
+            // Clear any pending single-click action
+            if (linkClickTimeoutRef.current) {
+              clearTimeout(linkClickTimeoutRef.current)
+              linkClickTimeoutRef.current = null
+            }
+
+            if (e.detail === 2) {
+              // Double click - open modal
+              openLinkEditModal(linkName)
+            } else {
+              // Single click - delay selection to allow for double-click
+              linkClickTimeoutRef.current = setTimeout(() => {
+                setSelectedLinks([linkName])
+                setSelectedJoints([])
+                linkClickTimeoutRef.current = null
+              }, 200)
+            }
+          }
+
           return (
             <Box
               key={linkName}
               onMouseEnter={() => setHoveredLink(linkName)}
               onMouseLeave={() => setHoveredLink(null)}
-              onClick={() => { setSelectedLinks([linkName]); setSelectedJoints([]) }}
-              onDoubleClick={() => setEditingLink(linkName)}
+              onClick={handleClick}
               sx={{
                 py: 0.75, px: 1.5, cursor: 'pointer',
                 backgroundColor: isSelected ? `${selectionColor}14` : (isHovered ? `${selectionColor}1f` : 'transparent'),
@@ -3080,48 +3730,48 @@ const PylinkBuilderTab: React.FC = () => {
     setPylinkDoc(prev => {
       const jointIndex = prev.pylinkage.joints.findIndex(j => j.name === jointName)
       if (jointIndex === -1) return prev
-      
+
       const newJoints = [...prev.pylinkage.joints]
       const currentJoint = newJoints[jointIndex]
-      
+
       if (property === 'type') {
         // Get current position BEFORE changing type (single source of truth)
         const pos = getJointPosition(jointName)
         if (!pos) return prev
-        
+
         const newType = value as 'Static' | 'Crank' | 'Revolute'
-        
+
         // Prepare updated meta.joints with position preserved
         const newMetaJoints = { ...prev.meta.joints }
         const currentMeta = newMetaJoints[jointName] || { color: '', zlevel: 0 }
-        
+
         if (newType === 'Static') {
           // Convert to Static: store position in pylinkage data, remove from meta
-          newJoints[jointIndex] = { 
-            type: 'Static', 
-            name: jointName, 
-            x: pos[0], 
-            y: pos[1] 
+          newJoints[jointIndex] = {
+            type: 'Static',
+            name: jointName,
+            x: pos[0],
+            y: pos[1]
           } as StaticJoint
           // Remove UI position from meta (Static uses pylinkage x,y)
           newMetaJoints[jointName] = { ...currentMeta, x: undefined, y: undefined }
         } else if (newType === 'Crank') {
           // Convert to Crank: store UI position in meta
-          const existingParent = currentJoint.type === 'Crank' 
-            ? currentJoint.joint0.ref 
-            : currentJoint.type === 'Revolute' 
-              ? currentJoint.joint0.ref 
+          const existingParent = currentJoint.type === 'Crank'
+            ? currentJoint.joint0.ref
+            : currentJoint.type === 'Revolute'
+              ? currentJoint.joint0.ref
               : prev.pylinkage.joints.find(j => j.type === 'Static' && j.name !== jointName)?.name
-          
+
           if (!existingParent) {
             showStatus('Need a static joint to reference for Crank type', 'error', 2000)
             return prev
           }
-          
+
           const parentPos = getJointPosition(existingParent)
           const distance = parentPos ? calculateDistance(parentPos, pos) : 10
           const angle = parentPos ? Math.atan2(pos[1] - parentPos[1], pos[0] - parentPos[0]) : 0
-          
+
           newJoints[jointIndex] = {
             type: 'Crank',
             name: jointName,
@@ -3129,17 +3779,17 @@ const PylinkBuilderTab: React.FC = () => {
             distance: distance,
             angle: angle
           } as CrankJoint
-          
+
           // Store UI position in meta (single source of truth)
           newMetaJoints[jointName] = { ...currentMeta, x: pos[0], y: pos[1], show_path: true }
         } else if (newType === 'Revolute') {
           // Convert to Revolute: store UI position in meta
           // IMPORTANT: Look at visual links to determine actual parent joints!
           const connectedJoints = getConnectedJointsFromLinks(jointName, prev.meta.links)
-          
+
           let existingParent0: string | undefined
           let existingParent1: string | undefined
-          
+
           if (connectedJoints.length >= 2) {
             // Use the joints that are visually connected via links
             existingParent0 = connectedJoints[0]
@@ -3150,24 +3800,24 @@ const PylinkBuilderTab: React.FC = () => {
             existingParent1 = currentJoint.joint1.ref
           } else {
             // Fallback: use any two joints (not ideal, but prevents crash)
-            existingParent0 = currentJoint.type === 'Crank' 
-              ? currentJoint.joint0.ref 
+            existingParent0 = currentJoint.type === 'Crank'
+              ? currentJoint.joint0.ref
               : prev.pylinkage.joints.find(j => j.name !== jointName)?.name
             existingParent1 = prev.pylinkage.joints.find(
               j => j.name !== jointName && j.name !== existingParent0
             )?.name
           }
-          
+
           if (!existingParent0 || !existingParent1) {
             showStatus('Need two joints to reference for Revolute type (draw links first)', 'error', 2000)
             return prev
           }
-          
+
           const parent0Pos = getJointPosition(existingParent0)
           const parent1Pos = getJointPosition(existingParent1)
           const distance0 = parent0Pos ? calculateDistance(parent0Pos, pos) : 10
           const distance1 = parent1Pos ? calculateDistance(parent1Pos, pos) : 10
-          
+
           newJoints[jointIndex] = {
             type: 'Revolute',
             name: jointName,
@@ -3176,23 +3826,23 @@ const PylinkBuilderTab: React.FC = () => {
             distance0: distance0,
             distance1: distance1
           } as RevoluteJoint
-          
+
           // Store UI position in meta (single source of truth)
           newMetaJoints[jointName] = { ...currentMeta, x: pos[0], y: pos[1], show_path: true }
         }
-        
+
         showStatus(`Changed ${jointName} to ${newType}`, 'success', 1500)
-        
+
         // Clear trajectory (will trigger auto-simulation via effect)
         clearTrajectory()
-        
-        return { 
-          ...prev, 
+
+        return {
+          ...prev,
           pylinkage: { ...prev.pylinkage, joints: newJoints },
           meta: { ...prev.meta, joints: newMetaJoints }
         }
       }
-      
+
       return prev
     })
     // Trigger auto-simulation after state update
@@ -3208,7 +3858,7 @@ const PylinkBuilderTab: React.FC = () => {
     }
     setPylinkDoc(prev => {
       // Update joint name
-      const newJoints = prev.pylinkage.joints.map(j => 
+      const newJoints = prev.pylinkage.joints.map(j =>
         j.name === oldName ? { ...j, name: newName } : j
       )
       // Update solve_order
@@ -3240,18 +3890,24 @@ const PylinkBuilderTab: React.FC = () => {
         }
         return j
       })
-      
+
       return {
         ...prev,
         pylinkage: { ...prev.pylinkage, joints: updatedJoints, solve_order: newSolveOrder },
         meta: { ...prev.meta, joints: newMetaJoints, links: newLinks }
       }
     })
-    setEditingJoint(newName)
+    // Update the modal data with new name if modal is open
+    if (editingJointData && editingJointData.name === oldName) {
+      setEditingJointData(prev => prev ? { ...prev, name: newName } : null)
+    }
     showStatus(`Renamed to ${newName}`, 'success', 1500)
-  }, [pylinkDoc.pylinkage.joints, showStatus])
+  }, [pylinkDoc.pylinkage.joints, showStatus, editingJointData])
 
-  // Nodes toolbar content
+  // Track click timing for distinguishing single vs double click
+  const jointClickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Nodes toolbar content - double-click opens edit modal
   const NodesContent = () => (
     <Box sx={{ overflow: 'auto', maxHeight: 350 }}>
       {pylinkDoc.pylinkage.joints.length === 0 ? (
@@ -3261,67 +3917,37 @@ const PylinkBuilderTab: React.FC = () => {
         </Box>
       ) : (
         pylinkDoc.pylinkage.joints.map((joint) => {
-          const isEditing = editingJoint === joint.name
           const pos = getJointPosition(joint.name)
           const isSelected = selectedJoints.includes(joint.name)
           const isHovered = hoveredJoint === joint.name
-          const typeColor = joint.type === 'Static' ? '#e74c3c' : joint.type === 'Crank' ? '#f39c12' : '#2196f3'
-          
-          if (isEditing) {
-            return (
-              <Box key={joint.name} sx={{ p: 1.5, borderBottom: '1px solid #eee', backgroundColor: 'rgba(25, 118, 210, 0.05)' }}>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                  <Typography variant="caption" sx={{ fontWeight: 600 }}>Edit Joint</Typography>
-                  <Button size="small" onClick={() => setEditingJoint(null)} sx={{ minWidth: 'auto', fontSize: '0.7rem' }}>Done</Button>
-                </Box>
-                <TextField
-                  size="small"
-                  label="Name"
-                  defaultValue={joint.name}
-                  onBlur={(e) => {
-                    if (e.target.value !== joint.name) {
-                      renameJoint(joint.name, e.target.value)
-                    }
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      const target = e.target as HTMLInputElement
-                      if (target.value !== joint.name) {
-                        renameJoint(joint.name, target.value)
-                      }
-                      target.blur()
-                    }
-                  }}
-                  fullWidth
-                  sx={{ mb: 1, '& .MuiInputBase-input': { fontSize: '0.75rem' } }}
-                />
-                <FormControl size="small" fullWidth sx={{ mb: 1 }}>
-                  <InputLabel sx={{ fontSize: '0.75rem' }}>Type</InputLabel>
-                  <Select
-                    value={joint.type}
-                    label="Type"
-                    onChange={(e) => updateJointProperty(joint.name, 'type', e.target.value)}
-                    sx={{ fontSize: '0.75rem' }}
-                  >
-                    {JOINT_TYPES.map(t => (
-                      <MenuItem key={t} value={t} sx={{ fontSize: '0.75rem' }}>{t}</MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-                <Typography variant="caption" color="text.secondary" display="block">
-                  Position: ({pos?.[0].toFixed(1) ?? '?'}, {pos?.[1].toFixed(1) ?? '?'})
-                </Typography>
-              </Box>
-            )
+          const typeColor = joint.type === 'Static' ? jointColors.static : joint.type === 'Crank' ? jointColors.crank : jointColors.pivot
+
+          const handleClick = (e: React.MouseEvent) => {
+            // Clear any pending single-click action
+            if (jointClickTimeoutRef.current) {
+              clearTimeout(jointClickTimeoutRef.current)
+              jointClickTimeoutRef.current = null
+            }
+
+            if (e.detail === 2) {
+              // Double click - open modal
+              openJointEditModal(joint.name)
+            } else {
+              // Single click - delay selection to allow for double-click
+              jointClickTimeoutRef.current = setTimeout(() => {
+                setSelectedJoints([joint.name])
+                setSelectedLinks([])
+                jointClickTimeoutRef.current = null
+              }, 200)
+            }
           }
-          
+
           return (
             <Box
               key={joint.name}
               onMouseEnter={() => setHoveredJoint(joint.name)}
               onMouseLeave={() => setHoveredJoint(null)}
-              onClick={() => { setSelectedJoints([joint.name]); setSelectedLinks([]) }}
-              onDoubleClick={() => setEditingJoint(joint.name)}
+              onClick={handleClick}
               sx={{
                 py: 0.75, px: 1.5, cursor: 'pointer',
                 backgroundColor: isSelected ? `${selectionColor}14` : (isHovered ? `${selectionColor}1f` : 'transparent'),
@@ -3354,8 +3980,9 @@ const PylinkBuilderTab: React.FC = () => {
   // More toolbar content
   const MoreContent = () => {
     const hasCrank = canSimulate(pylinkDoc.pylinkage.joints)
-    const canAnimate = trajectoryData !== null && trajectoryData.nSteps > 0
-    
+    const canAnimate = trajectoryData !== null && trajectoryData.nSteps > 0 && stretchingLinks.length === 0
+    const hasStretchingLinks = stretchingLinks.length > 0
+
     return (
       <Box sx={{ p: 1.5 }}>
         {/* ═══════════════════════════════════════════════════════════════════════
@@ -3365,7 +3992,7 @@ const PylinkBuilderTab: React.FC = () => {
           Animation
         </Typography>
         <Box sx={{ display: 'flex', gap: 0.5, mt: 1, mb: 1 }}>
-          <Tooltip 
+          <Tooltip
             title={
               <Box>
                 <Typography variant="body2">
@@ -3376,6 +4003,10 @@ const PylinkBuilderTab: React.FC = () => {
                 </Typography>
               </Box>
             }
+            enterDelay={400}
+            leaveDelay={100}
+            placement="top"
+            arrow
           >
             <span style={{ flex: 1 }}>
               <Button
@@ -3385,6 +4016,14 @@ const PylinkBuilderTab: React.FC = () => {
                 onMouseDown={(e) => {
                   // Use onMouseDown for more responsive click during animation
                   e.preventDefault()
+                  if (hasStretchingLinks) {
+                    showStatus(
+                      `Cannot animate: ${stretchingLinks.join(', ')} would stretch. Fix kinematic constraints first.`,
+                      'error',
+                      3000
+                    )
+                    return
+                  }
                   if (animationState.isAnimating) {
                     pauseAnimation()
                   } else {
@@ -3398,8 +4037,8 @@ const PylinkBuilderTab: React.FC = () => {
                     }
                   }
                 }}
-                disabled={!hasCrank || isSimulating}
-                sx={{ 
+                disabled={!hasCrank || isSimulating || hasStretchingLinks}
+                sx={{
                   textTransform: 'none', fontSize: '0.75rem',
                   backgroundColor: animationState.isAnimating ? '#ff9800' : '#4caf50',
                   '&:hover': { backgroundColor: animationState.isAnimating ? '#f57c00' : '#388e3c' },
@@ -3411,7 +4050,13 @@ const PylinkBuilderTab: React.FC = () => {
               </Button>
             </span>
           </Tooltip>
-          <Tooltip title="Reset: Returns the mechanism to its starting position (frame 0)">
+          <Tooltip
+            title="Reset: Returns the mechanism to its starting position (frame 0)"
+            enterDelay={400}
+            leaveDelay={100}
+            placement="top"
+            arrow
+          >
             <span>
               <Button
                 variant="outlined"
@@ -3421,7 +4066,7 @@ const PylinkBuilderTab: React.FC = () => {
                   setAnimatedPositions(null)
                 }}
                 disabled={!canAnimate && animationState.currentFrame === 0}
-                sx={{ 
+                sx={{
                   textTransform: 'none', fontSize: '0.75rem', minWidth: 40,
                   borderColor: '#666', color: '#666'
                 }}
@@ -3431,7 +4076,7 @@ const PylinkBuilderTab: React.FC = () => {
             </span>
           </Tooltip>
         </Box>
-        
+
         {/* Animation info & speed control */}
         {canAnimate && (
           <Box sx={{ mb: 1.5 }}>
@@ -3460,9 +4105,9 @@ const PylinkBuilderTab: React.FC = () => {
             </Box>
           </Box>
         )}
-        
+
         <Divider sx={{ my: 1 }} />
-        
+
         {/* ═══════════════════════════════════════════════════════════════════════
             SIMULATION - Computes and displays trajectory dots
             ═══════════════════════════════════════════════════════════════════════ */}
@@ -3470,22 +4115,22 @@ const PylinkBuilderTab: React.FC = () => {
           Trajectory Simulation
         </Typography>
         <Box sx={{ display: 'flex', gap: 0.5, mt: 1, mb: 1 }}>
-          <Tooltip 
+          <Tooltip
             title={
-              <Box sx={{ p: 0.5 }}>
-                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+              <Box sx={{ p: 0.5, maxWidth: 280 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>
                   {autoSimulateEnabled ? 'Disable Continuous Simulation' : 'Enable Continuous Simulation'}
                 </Typography>
-                <Typography variant="caption" sx={{ display: 'block', mt: 0.5 }}>
-                  When enabled, the trajectory is automatically recomputed whenever you modify the mechanism 
-                  (move joints, change link lengths, etc.). The simulation runs after a configurable delay 
-                  ({autoSimulateDelayMs}ms) to avoid excessive computation while dragging.
-                </Typography>
-                <Typography variant="caption" sx={{ display: 'block', mt: 0.5, fontStyle: 'italic', opacity: 0.8 }}>
-                  Configure the delay in Settings → Simulation → Auto-Simulate Delay
+                <Typography variant="caption" sx={{ display: 'block', mt: 0.5, fontSize: '0.65rem' }}>
+                  When enabled, the trajectory is automatically recomputed whenever you modify the mechanism.
+                  Delay: {autoSimulateDelayMs}ms (configurable in Settings).
                 </Typography>
               </Box>
             }
+            enterDelay={500}
+            leaveDelay={100}
+            placement="top"
+            arrow
           >
             <span style={{ flex: 1 }}>
               <Button
@@ -3501,7 +4146,7 @@ const PylinkBuilderTab: React.FC = () => {
                   }
                 }}
                 disabled={isSimulating || !hasCrank}
-                sx={{ 
+                sx={{
                   textTransform: 'none', fontSize: '0.7rem',
                   backgroundColor: autoSimulateEnabled ? '#2196f3' : '#666',
                   '&:hover': { backgroundColor: autoSimulateEnabled ? '#1976d2' : '#555' }
@@ -3512,7 +4157,7 @@ const PylinkBuilderTab: React.FC = () => {
             </span>
           </Tooltip>
         </Box>
-        
+
         {/* Show/Hide trajectory toggle when we have data */}
         {trajectoryData && (
           <Box sx={{ mb: 1 }}>
@@ -3521,20 +4166,20 @@ const PylinkBuilderTab: React.FC = () => {
               fullWidth
               size="small"
               onClick={() => setShowTrajectory(!showTrajectory)}
-              sx={{ 
+              sx={{
                 textTransform: 'none', fontSize: '0.7rem',
                 backgroundColor: showTrajectory ? '#9c27b0' : 'transparent',
                 borderColor: '#9c27b0', color: showTrajectory ? '#fff' : '#9c27b0',
                 '&:hover': { backgroundColor: showTrajectory ? '#7b1fa2' : 'rgba(156, 39, 176, 0.1)' }
               }}
             >
-              {showTrajectory ? 'Hide All Paths' : 'Show All Paths'}
+              {showTrajectory ? 'Hide Pathss' : 'Show All Paths'}
             </Button>
           </Box>
         )}
-        
+
         <Divider sx={{ my: 1 }} />
-        
+
         {/* ═══════════════════════════════════════════════════════════════════════
             DEMOS
             ═══════════════════════════════════════════════════════════════════════ */}
@@ -3550,9 +4195,9 @@ const PylinkBuilderTab: React.FC = () => {
         >
           ◇ Four Bar Demo
         </Button>
-        
+
         <Divider sx={{ my: 1 }} />
-        
+
         {/* ═══════════════════════════════════════════════════════════════════════
             FILE OPERATIONS
             ═══════════════════════════════════════════════════════════════════════ */}
@@ -3577,10 +4222,265 @@ const PylinkBuilderTab: React.FC = () => {
         >
           ↓ Save
         </Button>
+
+        <Divider sx={{ my: 1 }} />
+
+        {/* ═══════════════════════════════════════════════════════════════════════
+            VALIDATION
+            ═══════════════════════════════════════════════════════════════════════ */}
+        <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
+          Validation
+        </Typography>
+        <Tooltip
+          title={
+            <Box sx={{ p: 0.5, maxWidth: 240 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600, fontSize: '0.75rem' }}>
+                Validate Mechanism
+              </Typography>
+              <Typography variant="caption" sx={{ display: 'block', mt: 0.5, fontSize: '0.65rem' }}>
+                Checks if the mechanism can be simulated. Requires links, a Crank driver, and Static ground.
+              </Typography>
+            </Box>
+          }
+          enterDelay={500}
+          leaveDelay={100}
+          placement="top"
+          arrow
+        >
+          <span style={{ display: 'block', marginTop: 8 }}>
+            <Button
+              variant="outlined"
+              fullWidth
+              size="small"
+              onClick={validateMechanism}
+              sx={{
+                textTransform: 'none',
+                justifyContent: 'flex-start',
+                fontSize: '0.75rem',
+                borderColor: '#1976d2',
+                color: '#1976d2',
+                '&:hover': {
+                  backgroundColor: 'rgba(25, 118, 210, 0.08)',
+                  borderColor: '#1565c0'
+                }
+              }}
+            >
+              ✓ Validate
+            </Button>
+          </span>
+        </Tooltip>
       </Box>
     )
   }
-  
+
+  // Run trajectory optimization
+  // Extract current dimensions from pylink document (for showing before/after)
+  const extractCurrentDimensions = (doc: PylinkDocument): Record<string, number> => {
+    const dims: Record<string, number> = {}
+    for (const joint of doc.pylinkage.joints) {
+      if (joint.type === 'Crank' && joint.distance !== undefined) {
+        dims[`${joint.name}_distance`] = joint.distance
+      } else if (joint.type === 'Revolute') {
+        if (joint.distance0 !== undefined) dims[`${joint.name}_distance0`] = joint.distance0
+        if (joint.distance1 !== undefined) dims[`${joint.name}_distance1`] = joint.distance1
+      }
+    }
+    return dims
+  }
+
+  // Revert to pre-optimization state
+  const revertOptimization = () => {
+    if (preOptimizationDoc) {
+      setPylinkDoc(preOptimizationDoc)
+      setPreOptimizationDoc(null)
+      setOptimizationResult(null)
+      triggerMechanismChange()
+      showStatus('Reverted to pre-optimization state', 'info', 2000)
+    }
+  }
+
+  // Preprocess trajectory (smooth and/or resample)
+  const preprocessTrajectory = async () => {
+    const selectedPath = targetPaths.find(p => p.id === selectedPathId)
+    if (!selectedPath || selectedPath.points.length < 3) {
+      showStatus('Select a path with at least 3 points', 'warning', 2000)
+      return
+    }
+
+    try {
+      setIsPreprocessing(true)
+      setPreprocessResult(null)
+      showStatus('Preprocessing trajectory...', 'action')
+
+      const response = await fetch('/api/prepare-trajectory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          trajectory: selectedPath.points,
+          target_n_steps: prepTargetNSteps,
+          smooth: prepEnableSmooth,
+          smooth_window: prepSmoothWindow,
+          smooth_polyorder: prepSmoothPolyorder,
+          smooth_method: prepSmoothMethod,
+          resample: prepEnableResample,
+          resample_method: prepResampleMethod,
+          closed: true  // All target paths are treated as closed/cyclic
+        })
+      })
+
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const result = await response.json()
+
+      if (result.status === 'success') {
+        // Update the path with preprocessed points
+        const newPoints: [number, number][] = result.trajectory.map((p: number[]) => [p[0], p[1]] as [number, number])
+
+        setTargetPaths(prev => prev.map(p =>
+          p.id === selectedPathId
+            ? { ...p, points: newPoints, name: `${p.name} (processed)` }
+            : p
+        ))
+
+        setPreprocessResult({
+          originalPoints: result.original_points,
+          outputPoints: result.output_points,
+          analysis: result.analysis
+        })
+
+        showStatus(
+          `Preprocessed: ${result.original_points} → ${result.output_points} points`,
+          'success',
+          3000
+        )
+      } else {
+        showStatus(result.message || 'Preprocessing failed', 'error', 3000)
+      }
+    } catch (error) {
+      showStatus(`Preprocessing error: ${error}`, 'error', 3000)
+    } finally {
+      setIsPreprocessing(false)
+    }
+  }
+
+  const runOptimization = async () => {
+    const selectedPath = targetPaths.find(p => p.id === selectedPathId)
+    if (!selectedPath || !selectedPath.targetJoint) {
+      showStatus('Select a path and target joint first', 'warning', 2000)
+      return
+    }
+
+    // Warn if target path points don't match simulation steps
+    if (selectedPath.points.length !== simulationSteps) {
+      console.warn(`⚠️ Path has ${selectedPath.points.length} points but simulation uses ${simulationSteps} steps. Consider preprocessing the path.`)
+    }
+
+    try {
+      setIsOptimizing(true)
+      setOptimizationResult(null)
+      showStatus(`Running ${optMethod.toUpperCase()} optimization (N=${simulationSteps})...`, 'action')
+
+      // Save current state before optimization (deep copy)
+      const savedDoc = JSON.parse(JSON.stringify(pylinkDoc)) as PylinkDocument
+      setPreOptimizationDoc(savedDoc)
+
+      // Extract original dimensions for comparison
+      const originalDims = extractCurrentDimensions(pylinkDoc)
+
+      // Build optimization options based on method
+      const optimizationOptions: Record<string, unknown> = {
+        method: optMethod,
+        verbose: optVerbose,
+        bounds_factor: optBoundsFactor,
+        min_length: optMinLength
+      }
+
+      // PSO-specific options
+      if (optMethod === 'pso' || optMethod === 'pylinkage') {
+        optimizationOptions.n_particles = optNParticles
+        optimizationOptions.iterations = optIterations
+      }
+
+      // SciPy-specific options
+      if (optMethod === 'scipy' || optMethod === 'powell' || optMethod === 'nelder-mead') {
+        optimizationOptions.max_iterations = optMaxIterations
+        optimizationOptions.tolerance = optTolerance
+      }
+
+      const response = await fetch('/api/optimize-trajectory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pylink_data: {
+            ...pylinkDoc,
+            n_steps: simulationSteps  // Use simulation steps for consistency
+          },
+          target_path: {
+            joint_name: selectedPath.targetJoint,
+            positions: selectedPath.points
+          },
+          optimization_options: optimizationOptions
+        })
+      })
+
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const result = await response.json()
+
+      if (result.status === 'success' && result.result) {
+        const optResult = result.result
+
+        // Apply the optimized pylink data (backend now returns correct meta.joints positions)
+        if (optResult.optimized_pylink_data) {
+          // Backend has already updated meta.joints positions, just apply directly
+          setPylinkDoc(optResult.optimized_pylink_data as PylinkDocument)
+          triggerMechanismChange()
+        }
+
+        const improvement = optResult.initial_error > 0
+          ? ((1 - optResult.final_error / optResult.initial_error) * 100)
+          : 0
+
+        setOptimizationResult({
+          success: optResult.success,
+          initialError: optResult.initial_error,
+          finalError: optResult.final_error,
+          message: result.message,
+          iterations: optResult.iterations,
+          executionTimeMs: result.execution_time_ms,
+          optimizedDimensions: optResult.optimized_dimensions,
+          originalDimensions: originalDims
+        })
+
+        if (optResult.success) {
+          showStatus(`Optimization complete: ${improvement.toFixed(1)}% improvement`, 'success', 4000)
+        } else {
+          showStatus(`Optimization finished with limited improvement: ${improvement.toFixed(1)}%`, 'warning', 4000)
+        }
+      } else {
+        // Optimization failed - clear the saved state
+        setPreOptimizationDoc(null)
+        setOptimizationResult({
+          success: false,
+          initialError: 0,
+          finalError: 0,
+          message: result.message || 'Optimization failed'
+        })
+        showStatus(result.message || 'Optimization failed', 'error', 3000)
+      }
+    } catch (error) {
+      // Error - clear the saved state
+      setPreOptimizationDoc(null)
+      setOptimizationResult({
+        success: false,
+        initialError: 0,
+        finalError: 0,
+        message: `Error: ${error}`
+      })
+      showStatus(`Optimization error: ${error}`, 'error', 3000)
+    } finally {
+      setIsOptimizing(false)
+    }
+  }
+
   // Settings toolbar content
   const SettingsContent = () => (
     <Box sx={{ p: 1.5, minWidth: 240 }}>
@@ -3590,7 +4490,7 @@ const PylinkBuilderTab: React.FC = () => {
       <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
         Appearance
       </Typography>
-      
+
       {/* Dark Mode Toggle */}
       <FormControlLabel
         control={
@@ -3610,7 +4510,7 @@ const PylinkBuilderTab: React.FC = () => {
         }
         sx={{ mt: 1, mb: 0.5, ml: 0 }}
       />
-      
+
       {/* Show Grid Toggle */}
       <FormControlLabel
         control={
@@ -3623,7 +4523,7 @@ const PylinkBuilderTab: React.FC = () => {
         label={<Typography variant="body2" sx={{ fontSize: '0.8rem' }}>Show Grid</Typography>}
         sx={{ mb: 0.5, ml: 0 }}
       />
-      
+
       {/* Show Joint Labels Toggle */}
       <FormControlLabel
         control={
@@ -3636,7 +4536,7 @@ const PylinkBuilderTab: React.FC = () => {
         label={<Typography variant="body2" sx={{ fontSize: '0.8rem' }}>Joint Labels</Typography>}
         sx={{ mb: 0.5, ml: 0 }}
       />
-      
+
       {/* Show Link Labels Toggle */}
       <FormControlLabel
         control={
@@ -3649,16 +4549,16 @@ const PylinkBuilderTab: React.FC = () => {
         label={<Typography variant="body2" sx={{ fontSize: '0.8rem' }}>Link Labels</Typography>}
         sx={{ mb: 1, ml: 0 }}
       />
-      
+
       <Divider sx={{ my: 1.5 }} />
-      
+
       {/* ═══════════════════════════════════════════════════════════════════════
           SIMULATION SETTINGS
           ═══════════════════════════════════════════════════════════════════════ */}
       <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
         Simulation
       </Typography>
-      
+
       {/* Simulation Steps */}
       <Box sx={{ mt: 1.5, mb: 2 }}>
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}>
@@ -3678,7 +4578,7 @@ const PylinkBuilderTab: React.FC = () => {
           helperText={`Range: ${MIN_SIMULATION_STEPS}-${MAX_SIMULATION_STEPS} (auto-validates)`}
         />
       </Box>
-      
+
       {/* Auto-Simulate Delay */}
       <Box sx={{ mb: 2 }}>
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}>
@@ -3698,7 +4598,7 @@ const PylinkBuilderTab: React.FC = () => {
           helperText="Delay before auto-simulation triggers"
         />
       </Box>
-      
+
       {/* Trajectory Color Cycle */}
       <Box sx={{ mb: 2 }}>
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}>
@@ -3739,16 +4639,16 @@ const PylinkBuilderTab: React.FC = () => {
           </Select>
         </FormControl>
       </Box>
-      
+
       <Divider sx={{ my: 1.5 }} />
-      
+
       {/* ═══════════════════════════════════════════════════════════════════════
           INTERACTION SETTINGS
           ═══════════════════════════════════════════════════════════════════════ */}
       <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
         Interaction
       </Typography>
-      
+
       {/* Joint Merge Radius */}
       <Box sx={{ mt: 1.5, mb: 2 }}>
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}>
@@ -3768,16 +4668,16 @@ const PylinkBuilderTab: React.FC = () => {
           helperText="Snap distance for merging joints"
         />
       </Box>
-      
+
       <Divider sx={{ my: 1.5 }} />
-      
+
       {/* ═══════════════════════════════════════════════════════════════════════
           CANVAS/GRID SETTINGS
           ═══════════════════════════════════════════════════════════════════════ */}
       <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
         Canvas / Grid
       </Typography>
-      
+
       {/* Canvas Background Color */}
       <Box sx={{ mt: 1.5, mb: 1.5 }}>
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}>
@@ -3816,7 +4716,7 @@ const PylinkBuilderTab: React.FC = () => {
           </Select>
         </FormControl>
       </Box>
-      
+
       {/* Grid Spacing - TODO */}
       <Box sx={{ mb: 1.5, opacity: 0.5 }}>
         <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mb: 0.5 }}>
@@ -3830,7 +4730,7 @@ const PylinkBuilderTab: React.FC = () => {
           </Select>
         </FormControl>
       </Box>
-      
+
       {/* Snap to Grid - TODO */}
       <FormControlLabel
         control={<Switch size="small" disabled />}
@@ -3841,16 +4741,16 @@ const PylinkBuilderTab: React.FC = () => {
         }
         sx={{ mb: 1, ml: 0, opacity: 0.5 }}
       />
-      
+
       <Divider sx={{ my: 1.5 }} />
-      
+
       {/* ═══════════════════════════════════════════════════════════════════════
           VISUALIZATION SETTINGS
           ═══════════════════════════════════════════════════════════════════════ */}
       <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
         Visualization
       </Typography>
-      
+
       {/* Joint Size */}
       <Box sx={{ mt: 1.5, mb: 1.5 }}>
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}>
@@ -3860,14 +4760,14 @@ const PylinkBuilderTab: React.FC = () => {
           <input
             type="range"
             min={3}
-            max={12}
+            max={16}
             value={jointSize}
             onChange={(e) => setJointSize(parseInt(e.target.value))}
             style={{ width: '100%', accentColor: '#FA8112' }}
           />
         </Box>
       </Box>
-      
+
       {/* Link Thickness */}
       <Box sx={{ mb: 1.5 }}>
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}>
@@ -3877,14 +4777,14 @@ const PylinkBuilderTab: React.FC = () => {
           <input
             type="range"
             min={1}
-            max={8}
+            max={16}
             value={linkThickness}
             onChange={(e) => setLinkThickness(parseInt(e.target.value))}
             style={{ width: '100%', accentColor: '#FA8112' }}
           />
         </Box>
       </Box>
-      
+
       {/* Trajectory Dot Size */}
       <Box sx={{ mb: 1.5 }}>
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}>
@@ -3901,7 +4801,7 @@ const PylinkBuilderTab: React.FC = () => {
           />
         </Box>
       </Box>
-      
+
       {/* Selection Highlight Color */}
       <Box sx={{ mb: 1.5 }}>
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}>
@@ -3928,7 +4828,7 @@ const PylinkBuilderTab: React.FC = () => {
           })}
         </Box>
       </Box>
-      
+
       {/* Show Measurement Units */}
       <FormControlLabel
         control={
@@ -3941,16 +4841,16 @@ const PylinkBuilderTab: React.FC = () => {
         label={<Typography variant="body2" sx={{ fontSize: '0.8rem' }}>Show Measurement Units</Typography>}
         sx={{ mb: 1, ml: 0 }}
       />
-      
+
       <Divider sx={{ my: 1.5 }} />
-      
+
       {/* ═══════════════════════════════════════════════════════════════════════
           ANIMATION SETTINGS
           ═══════════════════════════════════════════════════════════════════════ */}
       <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
         Animation
       </Typography>
-      
+
       {/* Trajectory Style */}
       <Box sx={{ mt: 1.5, mb: 1.5 }}>
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}>
@@ -3968,7 +4868,7 @@ const PylinkBuilderTab: React.FC = () => {
           </Select>
         </FormControl>
       </Box>
-      
+
       {/* Animation Playback Speed - TODO */}
       <Box sx={{ mb: 1.5, opacity: 0.5 }}>
         <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mb: 0.5 }}>
@@ -3982,7 +4882,7 @@ const PylinkBuilderTab: React.FC = () => {
           </Select>
         </FormControl>
       </Box>
-      
+
       {/* Frame Interpolation - TODO */}
       <Box sx={{ mb: 1, opacity: 0.5 }}>
         <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mb: 0.5 }}>
@@ -3996,16 +4896,16 @@ const PylinkBuilderTab: React.FC = () => {
           </Select>
         </FormControl>
       </Box>
-      
+
       <Divider sx={{ my: 1.5 }} />
-      
+
       {/* ═══════════════════════════════════════════════════════════════════════
           EXPORT/IMPORT SETTINGS
           ═══════════════════════════════════════════════════════════════════════ */}
       <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
         Export / Import
       </Typography>
-      
+
       {/* Default File Format - TODO */}
       <Box sx={{ mt: 1.5, mb: 1.5, opacity: 0.5 }}>
         <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mb: 0.5 }}>
@@ -4019,7 +4919,7 @@ const PylinkBuilderTab: React.FC = () => {
           </Select>
         </FormControl>
       </Box>
-      
+
       {/* Auto-save Interval - TODO */}
       <Box sx={{ mb: 1.5, opacity: 0.5 }}>
         <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mb: 0.5 }}>
@@ -4034,7 +4934,7 @@ const PylinkBuilderTab: React.FC = () => {
           </Select>
         </FormControl>
       </Box>
-      
+
       {/* Include Metadata - TODO */}
       <FormControlLabel
         control={<Switch size="small" disabled defaultChecked />}
@@ -4045,16 +4945,16 @@ const PylinkBuilderTab: React.FC = () => {
         }
         sx={{ mb: 1, ml: 0, opacity: 0.5 }}
       />
-      
+
       <Divider sx={{ my: 1.5 }} />
-      
+
       {/* ═══════════════════════════════════════════════════════════════════════
           ADVANCED SETTINGS
           ═══════════════════════════════════════════════════════════════════════ */}
       <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
         Advanced
       </Typography>
-      
+
       {/* Undo History Limit - TODO */}
       <Box sx={{ mt: 1.5, mb: 1.5, opacity: 0.5 }}>
         <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mb: 0.5 }}>
@@ -4068,7 +4968,7 @@ const PylinkBuilderTab: React.FC = () => {
           </Select>
         </FormControl>
       </Box>
-      
+
       {/* Debug Mode - TODO */}
       <FormControlLabel
         control={<Switch size="small" disabled />}
@@ -4079,7 +4979,7 @@ const PylinkBuilderTab: React.FC = () => {
         }
         sx={{ mb: 0.5, ml: 0, opacity: 0.5 }}
       />
-      
+
       {/* Performance Mode - TODO */}
       <FormControlLabel
         control={<Switch size="small" disabled />}
@@ -4090,7 +4990,7 @@ const PylinkBuilderTab: React.FC = () => {
         }
         sx={{ mb: 0.5, ml: 0, opacity: 0.5 }}
       />
-      
+
       {/* Collision Detection Tolerance - TODO */}
       <Box sx={{ mb: 1, opacity: 0.5 }}>
         <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mb: 0.5 }}>
@@ -4109,12 +5009,871 @@ const PylinkBuilderTab: React.FC = () => {
   )
 
   // Render toolbar content based on id
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // OPTIMIZATION TOOLBAR CONTENT
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  const OptimizationContent = () => {
+    const hasCrank = canSimulate(pylinkDoc.pylinkage.joints)
+    const selectedPath = targetPaths.find(p => p.id === selectedPathId)
+    const canOptimize = selectedPath && selectedPath.targetJoint && hasCrank && !isOptimizing
+
+    // Method descriptions for tooltips
+    const methodDescriptions: Record<string, { name: string; description: string; pros: string; cons: string }> = {
+      'pso': {
+        name: 'Particle Swarm Optimization',
+        description: 'Bio-inspired algorithm where particles explore the solution space, sharing information about good solutions.',
+        pros: 'Robust, handles non-convex problems well, good at avoiding local minima',
+        cons: 'Slower than gradient methods, requires tuning particles/iterations'
+      },
+      'pylinkage': {
+        name: 'Pylinkage PSO',
+        description: 'Native PSO implementation from the pylinkage library, optimized for linkage mechanisms.',
+        pros: 'Designed specifically for linkages, well-tested',
+        cons: 'Similar tradeoffs to standard PSO'
+      },
+      'scipy': {
+        name: 'L-BFGS-B (SciPy)',
+        description: 'Quasi-Newton method with bounded constraints. Uses gradient approximation for fast convergence.',
+        pros: 'Very fast convergence for smooth problems',
+        cons: 'Can get stuck in local minima, requires good initial guess'
+      },
+      'powell': {
+        name: "Powell's Method",
+        description: 'Direction-set method that minimizes along each coordinate direction sequentially.',
+        pros: 'Gradient-free, good for noisy functions',
+        cons: 'Slower than gradient methods, may not find global optimum'
+      },
+      'nelder-mead': {
+        name: 'Nelder-Mead Simplex',
+        description: 'Direct search method using a simplex of N+1 points that adapts to the function landscape.',
+        pros: 'Very robust, no gradients needed, handles discontinuities',
+        cons: 'Slow for high dimensions, local optimizer only'
+      }
+    }
+
+    const currentMethodInfo = methodDescriptions[optMethod]
+
+    return (
+      <Box sx={{ p: 2 }}>
+        {/* ═══════════════════════════════════════════════════════════════════════
+            TARGET PATH SELECTION
+            ═══════════════════════════════════════════════════════════════════════ */}
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#e91e63', mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <span>📍</span> Target Path
+        </Typography>
+
+        {targetPaths.length > 0 ? (
+          <Box sx={{ mb: 2 }}>
+            {targetPaths.map(path => (
+              <Box
+                key={path.id}
+                onClick={() => setSelectedPathId(selectedPathId === path.id ? null : path.id)}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  p: 1,
+                  mb: 0.5,
+                  borderRadius: 1,
+                  cursor: 'pointer',
+                  bgcolor: selectedPathId === path.id ? 'rgba(233, 30, 99, 0.15)' : 'rgba(0,0,0,0.02)',
+                  border: '2px solid',
+                  borderColor: selectedPathId === path.id ? '#e91e63' : 'transparent',
+                  transition: 'all 0.15s ease',
+                  '&:hover': { bgcolor: 'rgba(233, 30, 99, 0.08)' }
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: path.color }} />
+                  <Box>
+                    <Typography variant="body2" sx={{ fontWeight: selectedPathId === path.id ? 600 : 400 }}>
+                      {path.name}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                      {path.points.length} points
+                      {path.targetJoint && ` • ${path.targetJoint}`}
+                    </Typography>
+                  </Box>
+                </Box>
+                <IconButton
+                  size="small"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setTargetPaths(prev => prev.filter(p => p.id !== path.id))
+                    if (selectedPathId === path.id) setSelectedPathId(null)
+                  }}
+                  sx={{ width: 24, height: 24, color: '#999', '&:hover': { color: '#d32f2f' } }}
+                >
+                  ×
+                </IconButton>
+              </Box>
+            ))}
+          </Box>
+        ) : (
+          <Box sx={{
+            p: 2,
+            mb: 2,
+            borderRadius: 1,
+            bgcolor: 'rgba(0,0,0,0.03)',
+            border: '1px dashed rgba(0,0,0,0.2)',
+            textAlign: 'center'
+          }}>
+            <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+              No target paths yet
+            </Typography>
+            <Typography variant="caption" sx={{ color: 'text.secondary', fontStyle: 'italic' }}>
+              Use <strong>Draw Path</strong> tool (T) to create one
+            </Typography>
+          </Box>
+        )}
+
+        {/* Joint selector */}
+        {selectedPathId && (
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}>
+              Joint to Optimize
+            </Typography>
+            <FormControl size="small" fullWidth>
+              <Select
+                value={selectedPath?.targetJoint || ''}
+                onChange={(e) => {
+                  setTargetPaths(prev => prev.map(p =>
+                    p.id === selectedPathId ? { ...p, targetJoint: e.target.value as string } : p
+                  ))
+                }}
+                displayEmpty
+                sx={{ fontSize: '0.85rem' }}
+              >
+                <MenuItem value="" sx={{ fontSize: '0.85rem' }}>
+                  <em>Select joint...</em>
+                </MenuItem>
+                {pylinkDoc.pylinkage.joints
+                  .filter(j => j.type === 'Crank' || j.type === 'Revolute')
+                  .map(j => (
+                    <MenuItem key={j.name} value={j.name} sx={{ fontSize: '0.85rem' }}>
+                      {j.name} <Chip label={j.type} size="small" sx={{ ml: 1, height: 18, fontSize: '0.65rem' }} />
+                    </MenuItem>
+                  ))
+                }
+              </Select>
+            </FormControl>
+          </Box>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════════════════
+            TRAJECTORY PREPROCESSING
+            ═══════════════════════════════════════════════════════════════════════ */}
+        {selectedPathId && selectedPath && (
+          <>
+            <Divider sx={{ my: 2 }} />
+
+            <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#00897b', mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <span>🔄</span> Path Preprocessing
+            </Typography>
+
+            <Box sx={{
+              p: 1.5,
+              mb: 1.5,
+              borderRadius: 1,
+              bgcolor: 'rgba(0, 137, 123, 0.05)',
+              border: '1px solid rgba(0, 137, 123, 0.2)'
+            }}>
+              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 1 }}>
+                Current path: <strong>{selectedPath.points.length} points</strong>
+                {preprocessResult && (
+                  <> • Processed from {preprocessResult.originalPoints} points</>
+                )}
+              </Typography>
+
+              {/* Smoothing Section */}
+              <Box sx={{ mb: 1.5 }}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={prepEnableSmooth}
+                      onChange={(e) => setPrepEnableSmooth(e.target.checked)}
+                      size="small"
+                      color="primary"
+                    />
+                  }
+                  label={<Typography variant="caption" sx={{ fontWeight: 500 }}>Enable Smoothing</Typography>}
+                />
+
+                {prepEnableSmooth && (
+                  <Box sx={{ pl: 1, mt: 0.5 }}>
+                    <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+                      <Box sx={{ flex: 1 }}>
+                        <Tooltip title="Smoothing filter type. Savgol preserves peaks, Moving Avg is aggressive, Gaussian is natural." placement="top">
+                          <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.25, cursor: 'help', fontSize: '0.65rem' }}>
+                            Method ⓘ
+                          </Typography>
+                        </Tooltip>
+                        <Select
+                          size="small"
+                          fullWidth
+                          value={prepSmoothMethod}
+                          onChange={(e) => setPrepSmoothMethod(e.target.value as typeof prepSmoothMethod)}
+                          sx={{ fontSize: '0.75rem', '& .MuiSelect-select': { py: 0.5 } }}
+                        >
+                          <MenuItem value="savgol" sx={{ fontSize: '0.75rem' }}>Savitzky-Golay</MenuItem>
+                          <MenuItem value="moving_avg" sx={{ fontSize: '0.75rem' }}>Moving Average</MenuItem>
+                          <MenuItem value="gaussian" sx={{ fontSize: '0.75rem' }}>Gaussian</MenuItem>
+                        </Select>
+                      </Box>
+                    </Box>
+
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <Box sx={{ flex: 1 }}>
+                        <Tooltip title="Window size. Larger = more smoothing. 2-4: light, 8-16: medium, 32+: heavy" placement="top">
+                          <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.25, cursor: 'help', fontSize: '0.65rem' }}>
+                            Window ⓘ
+                          </Typography>
+                        </Tooltip>
+                        <Select
+                          size="small"
+                          fullWidth
+                          value={prepSmoothWindow}
+                          onChange={(e) => setPrepSmoothWindow(e.target.value as number)}
+                          sx={{ fontSize: '0.75rem', '& .MuiSelect-select': { py: 0.5 } }}
+                        >
+                          <MenuItem value={2} sx={{ fontSize: '0.75rem' }}>2 (Light)</MenuItem>
+                          <MenuItem value={4} sx={{ fontSize: '0.75rem' }}>4 (Default)</MenuItem>
+                          <MenuItem value={8} sx={{ fontSize: '0.75rem' }}>8 (Medium)</MenuItem>
+                          <MenuItem value={16} sx={{ fontSize: '0.75rem' }}>16</MenuItem>
+                          <MenuItem value={32} sx={{ fontSize: '0.75rem' }}>32 (Heavy)</MenuItem>
+                          <MenuItem value={64} sx={{ fontSize: '0.75rem' }}>64 (Max)</MenuItem>
+                        </Select>
+                      </Box>
+
+                      <Box sx={{ flex: 1 }}>
+                        <Tooltip title="Polynomial order for Savgol. Must be < window. Higher = preserves peaks better." placement="top">
+                          <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.25, cursor: 'help', fontSize: '0.65rem' }}>
+                            Polyorder ⓘ
+                          </Typography>
+                        </Tooltip>
+                        <Select
+                          size="small"
+                          fullWidth
+                          value={prepSmoothPolyorder}
+                          onChange={(e) => setPrepSmoothPolyorder(e.target.value as number)}
+                          disabled={prepSmoothMethod !== 'savgol'}
+                          sx={{ fontSize: '0.75rem', '& .MuiSelect-select': { py: 0.5 } }}
+                        >
+                          <MenuItem value={1} sx={{ fontSize: '0.75rem' }}>1 (Linear)</MenuItem>
+                          <MenuItem value={2} sx={{ fontSize: '0.75rem' }}>2</MenuItem>
+                          <MenuItem value={3} sx={{ fontSize: '0.75rem' }}>3 (Default)</MenuItem>
+                          <MenuItem value={4} sx={{ fontSize: '0.75rem' }}>4</MenuItem>
+                          <MenuItem value={5} sx={{ fontSize: '0.75rem' }}>5</MenuItem>
+                        </Select>
+                      </Box>
+                    </Box>
+                  </Box>
+                )}
+              </Box>
+
+              {/* Resampling Section */}
+              <Box sx={{ mb: 1.5 }}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={prepEnableResample}
+                      onChange={(e) => setPrepEnableResample(e.target.checked)}
+                      size="small"
+                      color="primary"
+                    />
+                  }
+                  label={<Typography variant="caption" sx={{ fontWeight: 500 }}>Enable Resampling</Typography>}
+                />
+
+                {prepEnableResample && (
+                  <Box sx={{ pl: 1, mt: 0.5 }}>
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <Box sx={{ flex: 1 }}>
+                        <Tooltip title={`Target number of points. Uses current Simulation Steps (${simulationSteps}) for optimization consistency.`} placement="top">
+                          <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.25, cursor: 'help', fontSize: '0.65rem' }}>
+                            Target Points ⓘ
+                          </Typography>
+                        </Tooltip>
+                        <TextField
+                          type="number"
+                          size="small"
+                          fullWidth
+                          value={prepTargetNSteps}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value)
+                            if (!isNaN(val) && val >= 4 && val <= 256) {
+                              setPrepTargetNSteps(val)
+                            }
+                          }}
+                          inputProps={{ min: 4, max: 256, step: 4 }}
+                          helperText={simulationSteps !== prepTargetNSteps ? `Sim uses ${simulationSteps}` : undefined}
+                          sx={{
+                            '& .MuiInputBase-input': { fontSize: '0.75rem', py: 0.5 },
+                            '& .MuiFormHelperText-root': { fontSize: '0.6rem', mt: 0.25, color: 'warning.main' }
+                          }}
+                        />
+                      </Box>
+
+                      <Box sx={{ flex: 1 }}>
+                        <Tooltip title="Interpolation method. Parametric is best for closed curves." placement="top">
+                          <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.25, cursor: 'help', fontSize: '0.65rem' }}>
+                            Method ⓘ
+                          </Typography>
+                        </Tooltip>
+                        <Select
+                          size="small"
+                          fullWidth
+                          value={prepResampleMethod}
+                          onChange={(e) => setPrepResampleMethod(e.target.value as typeof prepResampleMethod)}
+                          sx={{ fontSize: '0.75rem', '& .MuiSelect-select': { py: 0.5 } }}
+                        >
+                          <MenuItem value="parametric" sx={{ fontSize: '0.75rem' }}>Parametric</MenuItem>
+                          <MenuItem value="cubic" sx={{ fontSize: '0.75rem' }}>Cubic</MenuItem>
+                          <MenuItem value="linear" sx={{ fontSize: '0.75rem' }}>Linear</MenuItem>
+                        </Select>
+                      </Box>
+                    </Box>
+                  </Box>
+                )}
+              </Box>
+
+              {/* Preprocess Button */}
+              <Button
+                variant="outlined"
+                fullWidth
+                size="small"
+                onClick={preprocessTrajectory}
+                disabled={isPreprocessing || (!prepEnableSmooth && !prepEnableResample)}
+                sx={{
+                  textTransform: 'none',
+                  fontSize: '0.8rem',
+                  color: '#00897b',
+                  borderColor: '#00897b',
+                  '&:hover': {
+                    borderColor: '#00695c',
+                    bgcolor: 'rgba(0, 137, 123, 0.08)'
+                  },
+                  '&.Mui-disabled': { borderColor: '#ccc' }
+                }}
+              >
+                {isPreprocessing ? '⏳ Processing...' : '🔄 Apply Preprocessing'}
+              </Button>
+
+              {/* Preprocessing Result */}
+              {preprocessResult && (
+                <Box sx={{ mt: 1, p: 1, borderRadius: 0.5, bgcolor: 'rgba(0, 137, 123, 0.1)' }}>
+                  <Typography variant="caption" sx={{ display: 'block', color: '#00695c', fontWeight: 500 }}>
+                    ✓ Processed successfully
+                  </Typography>
+                  <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', fontSize: '0.65rem' }}>
+                    {preprocessResult.originalPoints} → {preprocessResult.outputPoints} points
+                    {preprocessResult.analysis && (
+                      <>
+                        {' • '}Path length: {(preprocessResult.analysis.total_path_length as number)?.toFixed(1)}
+                        {preprocessResult.analysis.is_closed && ' • Closed curve'}
+                      </>
+                    )}
+                  </Typography>
+                </Box>
+              )}
+            </Box>
+          </>
+        )}
+
+        <Divider sx={{ my: 2 }} />
+
+        {/* ═══════════════════════════════════════════════════════════════════════
+            SIMULATION STEPS (N_STEPS)
+            ═══════════════════════════════════════════════════════════════════════ */}
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#6a1b9a', mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <span>📊</span> Simulation Steps
+        </Typography>
+
+        <Box sx={{ mb: 2 }}>
+          <Tooltip title="Number of trajectory points for simulation and optimization. Higher = more precision but slower. Should match preprocessed trajectory points." placement="right">
+            <TextField
+              type="number"
+              size="small"
+              fullWidth
+              label="N_STEPS"
+              value={simulationStepsInput}
+              onChange={(e) => setSimulationStepsInput(e.target.value)}
+              inputProps={{ min: MIN_SIMULATION_STEPS, max: MAX_SIMULATION_STEPS, step: 4 }}
+              helperText={`Range: ${MIN_SIMULATION_STEPS}-${MAX_SIMULATION_STEPS}. Current: ${simulationSteps}`}
+              sx={{ '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+            />
+          </Tooltip>
+
+          {/* Sync button to match Target Points with Simulation Steps */}
+          {prepTargetNSteps !== simulationSteps && (
+            <Button
+              size="small"
+              variant="text"
+              onClick={() => setPrepTargetNSteps(simulationSteps)}
+              sx={{
+                mt: 0.5,
+                textTransform: 'none',
+                fontSize: '0.7rem',
+                color: '#6a1b9a'
+              }}
+            >
+              ↻ Sync preprocessing target ({prepTargetNSteps}) to {simulationSteps}
+            </Button>
+          )}
+        </Box>
+
+        <Divider sx={{ my: 2 }} />
+
+        {/* ═══════════════════════════════════════════════════════════════════════
+            OPTIMIZATION METHOD
+            ═══════════════════════════════════════════════════════════════════════ */}
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1976d2', mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <span>🔧</span> Method
+        </Typography>
+
+        <FormControl size="small" fullWidth sx={{ mb: 1 }}>
+          <Select
+            value={optMethod}
+            onChange={(e) => setOptMethod(e.target.value as typeof optMethod)}
+            sx={{ fontSize: '0.85rem' }}
+          >
+            <MenuItem value="pso">Particle Swarm (PSO)</MenuItem>
+            <MenuItem value="pylinkage">Pylinkage PSO</MenuItem>
+            <MenuItem value="scipy">L-BFGS-B (SciPy)</MenuItem>
+            <MenuItem value="powell">Powell's Method</MenuItem>
+            <MenuItem value="nelder-mead">Nelder-Mead Simplex</MenuItem>
+          </Select>
+        </FormControl>
+
+        {/* Method description */}
+        <Box sx={{
+          p: 1.5,
+          mb: 2,
+          borderRadius: 1,
+          bgcolor: 'rgba(25, 118, 210, 0.05)',
+          border: '1px solid rgba(25, 118, 210, 0.2)'
+        }}>
+          <Typography variant="caption" sx={{ fontWeight: 600, color: '#1976d2', display: 'block' }}>
+            {currentMethodInfo.name}
+          </Typography>
+          <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 0.5 }}>
+            {currentMethodInfo.description}
+          </Typography>
+          <Box sx={{ mt: 1, display: 'flex', gap: 2 }}>
+            <Box sx={{ flex: 1 }}>
+              <Typography variant="caption" sx={{ color: '#2e7d32', fontWeight: 500 }}>✓ Pros</Typography>
+              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', fontSize: '0.65rem' }}>
+                {currentMethodInfo.pros}
+              </Typography>
+            </Box>
+            <Box sx={{ flex: 1 }}>
+              <Typography variant="caption" sx={{ color: '#d32f2f', fontWeight: 500 }}>✗ Cons</Typography>
+              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', fontSize: '0.65rem' }}>
+                {currentMethodInfo.cons}
+              </Typography>
+            </Box>
+          </Box>
+        </Box>
+
+        <Divider sx={{ my: 2 }} />
+
+        {/* ═══════════════════════════════════════════════════════════════════════
+            HYPERPARAMETERS
+            ═══════════════════════════════════════════════════════════════════════ */}
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#7b1fa2', mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <span>⚙️</span> Hyperparameters
+        </Typography>
+
+        {/* PSO-specific parameters */}
+        {(optMethod === 'pso' || optMethod === 'pylinkage') && (
+          <>
+            <Box sx={{ mb: 1.5 }}>
+              <Tooltip title="Number of particles in the swarm. More particles = better exploration but slower. Typical: 20-50" placement="left">
+                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, cursor: 'help' }}>
+                  Swarm Size (Particles) ⓘ
+                </Typography>
+              </Tooltip>
+              <TextField
+                type="number"
+                size="small"
+                fullWidth
+                value={optNParticles}
+                onChange={(e) => setOptNParticles(Math.max(5, Math.min(1024, parseInt(e.target.value) || 32)))}
+                inputProps={{ min: 5, max: 1024, step: 16 }}
+                sx={{ '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+              />
+            </Box>
+
+            <Box sx={{ mb: 1.5 }}>
+              <Tooltip title="Number of iterations for the swarm. More iterations = better convergence but slower. Typical: 256-1024, max 10000" placement="left">
+                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, cursor: 'help' }}>
+                  Iterations ⓘ
+                </Typography>
+              </Tooltip>
+              <TextField
+                type="number"
+                size="small"
+                fullWidth
+                value={optIterations}
+                onChange={(e) => setOptIterations(Math.max(10, Math.min(10000, parseInt(e.target.value) || 512)))}
+                inputProps={{ min: 10, max: 10000, step: 64 }}
+                sx={{ '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+              />
+            </Box>
+          </>
+        )}
+
+        {/* SciPy-specific parameters */}
+        {(optMethod === 'scipy' || optMethod === 'powell' || optMethod === 'nelder-mead') && (
+          <>
+            <Box sx={{ mb: 1.5 }}>
+              <Tooltip title="Maximum number of function evaluations. Prevents infinite loops. Typical: 100-1000" placement="left">
+                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, cursor: 'help' }}>
+                  Max Iterations ⓘ
+                </Typography>
+              </Tooltip>
+              <TextField
+                type="number"
+                size="small"
+                fullWidth
+                value={optMaxIterations}
+                onChange={(e) => setOptMaxIterations(Math.max(10, Math.min(10000, parseInt(e.target.value) || 100)))}
+                inputProps={{ min: 10, max: 10000, step: 50 }}
+                sx={{ '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+              />
+            </Box>
+
+            <Box sx={{ mb: 1.5 }}>
+              <Tooltip title="Convergence tolerance. Smaller = more precise but slower. Typical: 1e-4 to 1e-8" placement="left">
+                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, cursor: 'help' }}>
+                  Tolerance ⓘ
+                </Typography>
+              </Tooltip>
+              <Select
+                size="small"
+                fullWidth
+                value={optTolerance}
+                onChange={(e) => setOptTolerance(e.target.value as number)}
+                sx={{ fontSize: '0.85rem' }}
+              >
+                <MenuItem value={1e-4}>1e-4 (Fast, less precise)</MenuItem>
+                <MenuItem value={1e-5}>1e-5</MenuItem>
+                <MenuItem value={1e-6}>1e-6 (Default)</MenuItem>
+                <MenuItem value={1e-7}>1e-7</MenuItem>
+                <MenuItem value={1e-8}>1e-8 (Slow, very precise)</MenuItem>
+              </Select>
+            </Box>
+          </>
+        )}
+
+        <Divider sx={{ my: 2 }} />
+
+        {/* ═══════════════════════════════════════════════════════════════════════
+            BOUNDS & CONSTRAINTS
+            ═══════════════════════════════════════════════════════════════════════ */}
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#ed6c02', mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <span>📐</span> Bounds
+        </Typography>
+
+        <Box sx={{ mb: 1.5 }}>
+          <Tooltip title="How much link lengths can vary from initial values. Factor of 2.0 means lengths can be 0.5x to 2.0x original" placement="left">
+            <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, cursor: 'help' }}>
+              Bounds Factor ⓘ
+            </Typography>
+          </Tooltip>
+          <Select
+            size="small"
+            fullWidth
+            value={optBoundsFactor}
+            onChange={(e) => setOptBoundsFactor(e.target.value as number)}
+            sx={{ fontSize: '0.85rem' }}
+          >
+            <MenuItem value={1.25}>±25% (Conservative)</MenuItem>
+            <MenuItem value={1.5}>±50%</MenuItem>
+            <MenuItem value={2.0}>±100% (Default)</MenuItem>
+            <MenuItem value={3.0}>±200% (Wide)</MenuItem>
+            <MenuItem value={5.0}>±400% (Very Wide)</MenuItem>
+          </Select>
+        </Box>
+
+        <Box sx={{ mb: 1.5 }}>
+          <Tooltip title="Minimum allowed link length to prevent degenerate solutions" placement="left">
+            <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, cursor: 'help' }}>
+              Min Link Length ⓘ
+            </Typography>
+          </Tooltip>
+          <TextField
+            type="number"
+            size="small"
+            fullWidth
+            value={optMinLength}
+            onChange={(e) => setOptMinLength(Math.max(0.01, parseFloat(e.target.value) || 0.1))}
+            inputProps={{ min: 0.01, max: 10, step: 0.1 }}
+            sx={{ '& .MuiInputBase-input': { fontSize: '0.85rem' } }}
+          />
+        </Box>
+
+        <Divider sx={{ my: 2 }} />
+
+        {/* ═══════════════════════════════════════════════════════════════════════
+            RUN OPTIMIZATION
+            ═══════════════════════════════════════════════════════════════════════ */}
+        <Box sx={{ mb: 2 }}>
+          <FormControlLabel
+            control={
+              <Switch
+                checked={optVerbose}
+                onChange={(e) => setOptVerbose(e.target.checked)}
+                size="small"
+              />
+            }
+            label={<Typography variant="caption">Verbose logging</Typography>}
+          />
+        </Box>
+
+        <Button
+          variant="contained"
+          fullWidth
+          size="large"
+          onClick={runOptimization}
+          disabled={!canOptimize}
+          sx={{
+            textTransform: 'none',
+            fontSize: '1rem',
+            fontWeight: 600,
+            py: 1.5,
+            backgroundColor: '#e91e63',
+            '&:hover': { backgroundColor: '#c2185b' },
+            '&.Mui-disabled': { backgroundColor: '#e0e0e0' }
+          }}
+        >
+          {isOptimizing ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <span>⏳</span> Optimizing...
+            </Box>
+          ) : (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <span>⚡</span> Run Optimization
+            </Box>
+          )}
+        </Button>
+
+        {/* Disabled reason */}
+        {!canOptimize && !isOptimizing && (
+          <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 1, textAlign: 'center' }}>
+            {!hasCrank ? 'Need a valid mechanism with Crank' :
+             !selectedPath ? 'Select a target path above' :
+             !selectedPath.targetJoint ? 'Select a joint to optimize' :
+             'Ready to optimize'}
+          </Typography>
+        )}
+
+        {/* Warning if path points don't match simulation steps */}
+        {canOptimize && selectedPath && selectedPath.points.length !== simulationSteps && (
+          <Box sx={{
+            mt: 1,
+            p: 1,
+            borderRadius: 1,
+            bgcolor: 'rgba(237, 108, 2, 0.1)',
+            border: '1px solid #ed6c02'
+          }}>
+            <Typography variant="caption" sx={{ color: '#ed6c02', display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <span>⚠️</span> Path has {selectedPath.points.length} points but simulation uses {simulationSteps}.
+              Preprocess or adjust N_STEPS for best results.
+            </Typography>
+          </Box>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════════════════
+            RESULTS
+            ═══════════════════════════════════════════════════════════════════════ */}
+        {optimizationResult && (
+          <Box sx={{ mt: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700, color: optimizationResult.success ? '#2e7d32' : '#d32f2f' }}>
+                {optimizationResult.success ? '✓ Results' : '✗ Failed'}
+              </Typography>
+              {preOptimizationDoc && optimizationResult.success && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="warning"
+                  onClick={revertOptimization}
+                  sx={{
+                    textTransform: 'none',
+                    fontSize: '0.7rem',
+                    py: 0.25,
+                    px: 1,
+                    minWidth: 'auto'
+                  }}
+                >
+                  ↩ Revert
+                </Button>
+              )}
+            </Box>
+
+            <Box sx={{
+              p: 1.5,
+              borderRadius: 1,
+              bgcolor: optimizationResult.success ? 'rgba(46, 125, 50, 0.08)' : 'rgba(211, 47, 47, 0.08)',
+              border: '1px solid',
+              borderColor: optimizationResult.success ? '#4caf50' : '#f44336'
+            }}>
+              {optimizationResult.success ? (
+                <>
+                  {/* Error metrics */}
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                    <Typography variant="caption" sx={{ color: 'text.secondary' }}>Initial Error</Typography>
+                    <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 600, color: '#ff7043' }}>
+                      {optimizationResult.initialError.toFixed(4)}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                    <Typography variant="caption" sx={{ color: 'text.secondary' }}>Final Error</Typography>
+                    <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 600, color: '#2e7d32' }}>
+                      {optimizationResult.finalError.toFixed(4)}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                    <Typography variant="caption" sx={{ color: 'text.secondary' }}>Improvement</Typography>
+                    <Typography variant="caption" sx={{
+                      fontWeight: 700,
+                      color: optimizationResult.initialError > 0
+                        ? ((1 - optimizationResult.finalError / optimizationResult.initialError) * 100 > 50 ? '#2e7d32' : '#ed6c02')
+                        : '#666'
+                    }}>
+                      {optimizationResult.initialError > 0
+                        ? `${((1 - optimizationResult.finalError / optimizationResult.initialError) * 100).toFixed(1)}%`
+                        : 'N/A'}
+                    </Typography>
+                  </Box>
+                  {optimizationResult.iterations && (
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                      <Typography variant="caption" sx={{ color: 'text.secondary' }}>Iterations</Typography>
+                      <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
+                        {optimizationResult.iterations}
+                      </Typography>
+                    </Box>
+                  )}
+                  {optimizationResult.executionTimeMs && (
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <Typography variant="caption" sx={{ color: 'text.secondary' }}>Time</Typography>
+                      <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
+                        {(optimizationResult.executionTimeMs / 1000).toFixed(2)}s
+                      </Typography>
+                    </Box>
+                  )}
+
+                  {/* Show dimension changes: Before → After */}
+                  {optimizationResult.optimizedDimensions && optimizationResult.originalDimensions &&
+                   Object.keys(optimizationResult.optimizedDimensions).length > 0 && (
+                    <Box sx={{ mt: 1.5, pt: 1.5, borderTop: '1px solid rgba(0,0,0,0.1)' }}>
+                      <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 1 }}>
+                        Dimension Changes
+                      </Typography>
+                      <Box sx={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr auto auto auto',
+                        gap: 0.5,
+                        fontSize: '0.65rem',
+                        '& > *': { py: 0.25 }
+                      }}>
+                        {/* Header */}
+                        <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '0.6rem' }}>
+                          Parameter
+                        </Typography>
+                        <Typography variant="caption" sx={{ fontWeight: 600, color: '#ff7043', fontSize: '0.6rem', textAlign: 'right' }}>
+                          Before
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.6rem', textAlign: 'center' }}>
+                          →
+                        </Typography>
+                        <Typography variant="caption" sx={{ fontWeight: 600, color: '#2e7d32', fontSize: '0.6rem', textAlign: 'right' }}>
+                          After
+                        </Typography>
+
+                        {/* Data rows */}
+                        {Object.entries(optimizationResult.optimizedDimensions).map(([name, newValue]) => {
+                          const oldValue = optimizationResult.originalDimensions?.[name] ?? newValue
+                          const changed = Math.abs((newValue as number) - (oldValue as number)) > 0.001
+                          return (
+                            <React.Fragment key={name}>
+                              <Typography variant="caption" sx={{
+                                color: 'text.secondary',
+                                fontSize: '0.65rem',
+                                fontWeight: changed ? 500 : 400
+                              }}>
+                                {name.replace(/_/g, ' ')}
+                              </Typography>
+                              <Typography variant="caption" sx={{
+                                fontFamily: 'monospace',
+                                fontSize: '0.65rem',
+                                textAlign: 'right',
+                                color: '#ff7043'
+                              }}>
+                                {(oldValue as number).toFixed(2)}
+                              </Typography>
+                              <Typography variant="caption" sx={{
+                                color: changed ? '#1976d2' : 'text.secondary',
+                                fontSize: '0.65rem',
+                                textAlign: 'center'
+                              }}>
+                                {changed ? '→' : '='}
+                              </Typography>
+                              <Typography variant="caption" sx={{
+                                fontFamily: 'monospace',
+                                fontSize: '0.65rem',
+                                textAlign: 'right',
+                                color: '#2e7d32',
+                                fontWeight: changed ? 600 : 400
+                              }}>
+                                {(newValue as number).toFixed(2)}
+                              </Typography>
+                            </React.Fragment>
+                          )
+                        })}
+                      </Box>
+                    </Box>
+                  )}
+
+                  {/* Canvas updated notice */}
+                  <Box sx={{
+                    mt: 1.5,
+                    p: 1,
+                    bgcolor: 'rgba(25, 118, 210, 0.1)',
+                    borderRadius: 1,
+                    border: '1px solid rgba(25, 118, 210, 0.3)'
+                  }}>
+                    <Typography variant="caption" sx={{ color: '#1976d2', fontWeight: 500 }}>
+                      ✓ Canvas updated with optimized dimensions
+                    </Typography>
+                    {preOptimizationDoc && (
+                      <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 0.5, fontSize: '0.65rem' }}>
+                        Click "Revert" to restore original dimensions
+                      </Typography>
+                    )}
+                  </Box>
+                </>
+              ) : (
+                <Typography variant="caption" sx={{ color: '#d32f2f' }}>
+                  {optimizationResult.message}
+                </Typography>
+              )}
+            </Box>
+          </Box>
+        )}
+      </Box>
+    )
+  }
+
   const renderToolbarContent = (id: string) => {
     switch (id) {
       case 'tools': return <ToolsContent />
       case 'links': return <LinksContent />
       case 'nodes': return <NodesContent />
       case 'more': return <MoreContent />
+      case 'optimize': return <OptimizationContent />
       case 'settings': return <SettingsContent />
       default: return null
     }
@@ -4132,7 +5891,7 @@ const PylinkBuilderTab: React.FC = () => {
       crankAnchorPos[0] + crankDistance * Math.cos(crankAngle),
       crankAnchorPos[1] + crankDistance * Math.sin(crankAngle)
     ]
-    
+
     // Calculate Revolute position using circle-circle intersection
     const d0 = 50  // distance from crank
     const d1 = 40  // distance from rocker_anchor
@@ -4147,7 +5906,7 @@ const PylinkBuilderTab: React.FC = () => {
       px - (h * dy) / d,  // One of two solutions (above the line)
       py + (h * dx) / d
     ]
-    
+
     const demo: PylinkDocument = {
       name: '4bar',
       pylinkage: {
@@ -4168,7 +5927,7 @@ const PylinkBuilderTab: React.FC = () => {
           coupler_rocker_joint: { color: '#2ca02c', zlevel: 0, x: couplerJointPos[0], y: couplerJointPos[1], show_path: true }
         },
         links: {
-          ground: { color: '#7f7f7f', connects: ['crank_anchor', 'rocker_anchor'] },
+          ground: { color: '#7f7f7f', connects: ['crank_anchor', 'rocker_anchor'], isGround: true },
           crank_link: { color: '#ff7f0e', connects: ['crank_anchor', 'crank'] },
           coupler: { color: '#2ca02c', connects: ['crank', 'coupler_rocker_joint'] },
           rocker: { color: '#1f77b4', connects: ['coupler_rocker_joint', 'rocker_anchor'] }
@@ -4189,10 +5948,10 @@ const PylinkBuilderTab: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(pylinkDoc)
       })
-      
+
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
       const result = await response.json()
-      
+
       if (result.status === 'success') {
         showStatus(`Saved as ${result.filename}`, 'success', 3000)
       } else {
@@ -4203,50 +5962,86 @@ const PylinkBuilderTab: React.FC = () => {
     }
   }
 
+  // Validate mechanism - calls backend to check if mechanism can be simulated
+  const validateMechanism = async () => {
+    try {
+      showStatus('Validating mechanism...', 'action')
+      const response = await fetch('/api/validate-mechanism', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pylinkDoc)
+      })
+
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const result = await response.json()
+
+      if (result.status === 'error') {
+        showStatus(`Validation error: ${result.message}`, 'error', 5000)
+        return
+      }
+
+      // Handle validation result
+      if (result.valid) {
+        const groupCount = result.valid_groups?.length || 0
+        const jointCount = result.valid_groups?.reduce((acc: number, g: { joints: string[] }) => acc + g.joints.length, 0) || 0
+        showStatus(`✓ Valid mechanism: ${groupCount} group(s), ${jointCount} joints`, 'success', 4000)
+      } else {
+        // Collect error messages
+        const errors = result.errors || []
+        const errorMsg = errors.length > 0
+          ? errors.slice(0, 2).join('; ') + (errors.length > 2 ? ` (+${errors.length - 2} more)` : '')
+          : 'No valid mechanism groups found'
+        showStatus(`⚠ Invalid: ${errorMsg}`, 'warning', 5000)
+      }
+    } catch (error) {
+      showStatus(`Validation error: ${error}`, 'error', 3000)
+    }
+  }
+
   // Repair Revolute joints: sync joint0/joint1 references with visual links
   // This fixes the bug where joints have incorrect parent references
   const repairRevoluteJointReferences = useCallback((doc: PylinkDocument): PylinkDocument => {
     let repairCount = 0
     const repairedJoints = doc.pylinkage.joints.map(joint => {
       if (joint.type !== 'Revolute') return joint
-      
+
       // Find joints connected via visual links
       const connectedJoints = getConnectedJointsFromLinks(joint.name, doc.meta.links)
-      
+
       if (connectedJoints.length >= 2) {
         const currentParent0 = joint.joint0.ref
         const currentParent1 = joint.joint1.ref
-        
+
         // Check if current parents match the visual links
-        const needsRepair = !connectedJoints.includes(currentParent0) || 
+        const needsRepair = !connectedJoints.includes(currentParent0) ||
                            !connectedJoints.includes(currentParent1)
-        
+
         if (needsRepair) {
           // Get position for distance calculations
           const pos = doc.meta.joints[joint.name]?.x !== undefined && doc.meta.joints[joint.name]?.y !== undefined
             ? [doc.meta.joints[joint.name].x!, doc.meta.joints[joint.name].y!] as [number, number]
             : null
-          
+
           if (pos) {
             const newParent0 = connectedJoints[0]
             const newParent1 = connectedJoints[1]
-            
+
             // Get parent positions
             const parent0Joint = doc.pylinkage.joints.find(j => j.name === newParent0)
             const parent1Joint = doc.pylinkage.joints.find(j => j.name === newParent1)
-            
-            const parent0Pos = parent0Joint?.type === 'Static' 
+
+            const parent0Pos = parent0Joint?.type === 'Static'
               ? [parent0Joint.x, parent0Joint.y] as [number, number]
-              : doc.meta.joints[newParent0]?.x !== undefined 
+              : doc.meta.joints[newParent0]?.x !== undefined
                 ? [doc.meta.joints[newParent0].x!, doc.meta.joints[newParent0].y!] as [number, number]
                 : null
-                
-            const parent1Pos = parent1Joint?.type === 'Static' 
+
+            const parent1Pos = parent1Joint?.type === 'Static'
               ? [parent1Joint.x, parent1Joint.y] as [number, number]
-              : doc.meta.joints[newParent1]?.x !== undefined 
+              : doc.meta.joints[newParent1]?.x !== undefined
                 ? [doc.meta.joints[newParent1].x!, doc.meta.joints[newParent1].y!] as [number, number]
                 : null
-            
+
             if (parent0Pos && parent1Pos) {
               repairCount++
               console.log(`Repaired ${joint.name}: ${currentParent0},${currentParent1} → ${newParent0},${newParent1}`)
@@ -4263,11 +6058,11 @@ const PylinkBuilderTab: React.FC = () => {
       }
       return joint
     })
-    
+
     if (repairCount > 0) {
       showStatus(`Repaired ${repairCount} Revolute joint reference(s)`, 'info', 3000)
     }
-    
+
     return {
       ...doc,
       pylinkage: {
@@ -4277,22 +6072,62 @@ const PylinkBuilderTab: React.FC = () => {
     }
   }, [getConnectedJointsFromLinks, showStatus])
 
+  // Synchronize meta.joints positions with pylinkage.joints distances by running simulation
+  // This ensures the visual representation matches the actual mechanism geometry
+  const syncPositionsWithDistances = async (doc: PylinkDocument): Promise<PylinkDocument> => {
+    try {
+      // Use skip_sync=true to ensure we compute positions based on stored distances,
+      // not from old visual positions that might be out of sync
+      const response = await fetch('/api/compute-pylink-trajectory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pylink_data: doc, n_steps: 12, skip_sync: true })
+      })
+
+      if (!response.ok) return doc
+      const result = await response.json()
+
+      if (result.status === 'success' && result.trajectories) {
+        // Update meta.joints with first frame positions from simulation
+        const updatedMetaJoints = { ...doc.meta.joints }
+        for (const [jointName, positions] of Object.entries(result.trajectories)) {
+          const posArray = positions as [number, number][]
+          if (posArray && posArray.length > 0 && posArray[0]) {
+            const [x, y] = posArray[0]
+            if (updatedMetaJoints[jointName]) {
+              updatedMetaJoints[jointName] = { ...updatedMetaJoints[jointName], x, y }
+            } else {
+              updatedMetaJoints[jointName] = { x, y, color: '#ff7f0e', zlevel: 0, show_path: true }
+            }
+          }
+        }
+        return { ...doc, meta: { ...doc.meta, joints: updatedMetaJoints } }
+      }
+    } catch (e) {
+      console.warn('Could not sync positions with distances:', e)
+    }
+    return doc
+  }
+
   // Load pylink graph from server (most recent)
   const loadPylinkGraph = async () => {
     try {
       showStatus('Loading...', 'action')
       const response = await fetch('/api/load-pylink-graph')
-      
+
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
       const result = await response.json()
-      
+
       if (result.status === 'success' && result.data) {
         // Repair any Revolute joints with incorrect parent references
-        const repairedDoc = repairRevoluteJointReferences(result.data as PylinkDocument)
+        let repairedDoc = repairRevoluteJointReferences(result.data as PylinkDocument)
+        // Sync positions with distances (ensures visual matches geometry)
+        repairedDoc = await syncPositionsWithDistances(repairedDoc)
         setPylinkDoc(repairedDoc)
         setSelectedJoints([])
         setSelectedLinks([])
         clearTrajectory()  // Clear any old trajectory
+        triggerMechanismChange()
         showStatus(`Loaded ${result.filename}`, 'success', 3000)
       } else {
         showStatus(result.message || 'No graphs to load', 'warning', 3000)
@@ -4303,16 +6138,16 @@ const PylinkBuilderTab: React.FC = () => {
   }
 
   return (
-    <Box 
+    <Box
       ref={containerRef}
-      sx={{ 
-        position: 'relative', 
+      sx={{
+        position: 'relative',
         width: '100%',
         maxWidth: '100vw',
-        height: 'calc(100vh - 140px)', 
+        height: 'calc(100vh - 140px)',
         minWidth: CANVAS_MIN_WIDTH_PX,
         minHeight: CANVAS_MIN_HEIGHT_PX,
-        pb: '44px', // Space for fixed footer
+        pb: '38px', // Space for fixed footer (reduced from 44px)
         overflow: 'hidden'
       }}
     >
@@ -4323,10 +6158,10 @@ const PylinkBuilderTab: React.FC = () => {
           width: '100%',
           height: '100%',
           overflow: 'hidden',
-          backgroundColor: canvasBgColor === 'default' 
-            ? 'var(--color-canvas-bg)' 
-            : canvasBgColor === 'white' ? '#ffffff' 
-            : canvasBgColor === 'cream' ? '#FAF3E1' 
+          backgroundColor: canvasBgColor === 'default'
+            ? 'var(--color-canvas-bg)'
+            : canvasBgColor === 'white' ? '#ffffff'
+            : canvasBgColor === 'cream' ? '#FAF3E1'
             : '#1a1a1a',
           border: '1px solid var(--color-border)',
           borderRadius: 2,
@@ -4343,43 +6178,105 @@ const PylinkBuilderTab: React.FC = () => {
           onMouseUp={handleCanvasMouseUp}
           onMouseLeave={handleCanvasMouseUp}
           onClick={handleCanvasClick}
+          onDoubleClick={handleCanvasDoubleClick}
         >
+          {/* SVG Filter Definitions for Glow Effects */}
+          <defs>
+            {/* Joint type glows - uses joint's own color */}
+            <filter id="glow-static" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#E74C3C" floodOpacity="0.8"/>
+            </filter>
+            <filter id="glow-crank" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#F39C12" floodOpacity="0.8"/>
+            </filter>
+            <filter id="glow-pivot" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#2196F3" floodOpacity="0.8"/>
+            </filter>
+
+            {/* Graph color glows for links/objects */}
+            <filter id="glow-blue" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#1F77B4" floodOpacity="0.8"/>
+            </filter>
+            <filter id="glow-orange" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#FF7F0E" floodOpacity="0.8"/>
+            </filter>
+            <filter id="glow-green" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#2CA02C" floodOpacity="0.8"/>
+            </filter>
+            <filter id="glow-red" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#D62728" floodOpacity="0.8"/>
+            </filter>
+            <filter id="glow-purple" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#9467BD" floodOpacity="0.8"/>
+            </filter>
+            <filter id="glow-brown" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#8C564B" floodOpacity="0.8"/>
+            </filter>
+            <filter id="glow-pink" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#E377C2" floodOpacity="0.8"/>
+            </filter>
+            <filter id="glow-gray" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#7F7F7F" floodOpacity="0.8"/>
+            </filter>
+            <filter id="glow-olive" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#BCBD22" floodOpacity="0.8"/>
+            </filter>
+            <filter id="glow-cyan" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#17BECF" floodOpacity="0.8"/>
+            </filter>
+
+            {/* Move group glow (grey) - special case */}
+            <filter id="glow-movegroup" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="0" stdDeviation="2" floodColor="#9E9E9E" floodOpacity="0.6"/>
+            </filter>
+            {/* Merge highlight glow (cyan) - special case */}
+            <filter id="glow-merge" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="0" stdDeviation="4" floodColor="#00BCD4" floodOpacity="0.9"/>
+            </filter>
+          </defs>
+
           {/* Grid (toggleable via Settings) */}
           {showGrid && renderGrid()}
-          
+
           {/* Completed drawn objects (polygons, shapes) - render BEFORE links so links are on top */}
           {renderDrawnObjects()}
-          
+
           {/* Links - rendered on top of polygons so they can be clicked even inside polygons */}
           {renderLinks()}
-          
+
           {/* Preview line during link creation */}
           {renderPreviewLine()}
-          
+
           {/* Polygon preview during drawing */}
           {renderPolygonPreview()}
-          
+
+          {/* Target paths for trajectory optimization */}
+          {renderTargetPaths()}
+
+          {/* Target path preview during drawing */}
+          {renderPathPreview()}
+
           {/* Trajectory dots for simulation results */}
           {renderTrajectories()}
-          
+
           {/* Joints */}
           {renderJoints()}
-          
+
           {/* Group selection box */}
           {renderSelectionBox()}
-          
+
           {/* Measurement markers */}
           {renderMeasurementMarkers()}
           {renderMeasurementLine()}
         </svg>
-        
+
         {/* ToolbarToggleButtonsContainer - Horizontal button bar for toggling toolbars */}
         {/* Contains: Tools, Links, Nodes, More buttons in a horizontal row */}
-        <ToolbarToggleButtons 
+        <ToolbarToggleButtons
           openToolbars={openToolbars}
           onToggleToolbar={handleToggleToolbar}
         />
-        
+
         {/* Draggable floating toolbars */}
         {Array.from(openToolbars).map(toolbarId => {
           const config = TOOLBAR_CONFIGS.find(c => c.id === toolbarId)
@@ -4402,7 +6299,7 @@ const PylinkBuilderTab: React.FC = () => {
           )
         })}
       </Paper>
-      
+
       {/* Fixed Footer Toolbar */}
       <FooterToolbar
         toolMode={toolMode}
@@ -4416,10 +6313,12 @@ const PylinkBuilderTab: React.FC = () => {
         measureState={measureState}
         groupSelectionState={groupSelectionState}
         mergePolygonState={mergePolygonState}
+        pathDrawState={pathDrawState}
         canvasWidth={canvasDimensions.width}
         onCancelAction={cancelAction}
+        darkMode={darkMode}
       />
-      
+
       {/* Delete Confirmation Dialog */}
       <Dialog
         open={deleteConfirmDialog.open}
@@ -4451,13 +6350,13 @@ const PylinkBuilderTab: React.FC = () => {
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button 
+          <Button
             onClick={() => setDeleteConfirmDialog({ open: false, joints: [], links: [] })}
             color="inherit"
           >
             Cancel
           </Button>
-          <Button 
+          <Button
             onClick={confirmDelete}
             color="error"
             variant="contained"
@@ -4467,6 +6366,55 @@ const PylinkBuilderTab: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Joint Edit Modal */}
+      <JointEditModal
+        open={editingJointData !== null}
+        onClose={() => setEditingJointData(null)}
+        jointData={editingJointData}
+        jointTypes={JOINT_TYPES}
+        onRename={renameJoint}
+        onTypeChange={(jointName, newType) => updateJointProperty(jointName, 'type', newType)}
+        onShowPathChange={(jointName, showPath) => {
+          setPylinkDoc(prev => ({
+            ...prev,
+            meta: {
+              ...prev.meta,
+              joints: {
+                ...prev.meta.joints,
+                [jointName]: {
+                  ...prev.meta.joints[jointName],
+                  show_path: showPath
+                }
+              }
+            }
+          }))
+          // Update modal data
+          setEditingJointData(prev => prev ? { ...prev, showPath } : null)
+          // Trigger re-render of trajectories (paths are already computed, just need to re-render)
+          // No need to re-simulate - just triggering state update refreshes the render
+        }}
+        darkMode={darkMode}
+      />
+
+      {/* Link Edit Modal */}
+      <LinkEditModal
+        open={editingLinkData !== null}
+        onClose={() => setEditingLinkData(null)}
+        linkData={editingLinkData}
+        onRename={renameLink}
+        onColorChange={(linkName, color) => {
+          updateLinkProperty(linkName, 'color', color)
+          // Update modal data
+          setEditingLinkData(prev => prev ? { ...prev, color } : null)
+        }}
+        onGroundChange={(linkName, isGround) => {
+          updateLinkProperty(linkName, 'isGround', isGround)
+          // Update modal data
+          setEditingLinkData(prev => prev ? { ...prev, isGround } : null)
+        }}
+        darkMode={darkMode}
+      />
     </Box>
   )
 }

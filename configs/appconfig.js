@@ -6,16 +6,16 @@ export const AppConfig = {
   // Port Configuration
   FRONTEND_PORT: 5173,
   BACKEND_PORT: 8021,
-  
+
   // URLs (derived from ports)
   get FRONTEND_URL() {
     return `http://localhost:${this.FRONTEND_PORT}`
   },
-  
+
   get BACKEND_URL() {
     return `http://localhost:${this.BACKEND_PORT}`
   },
-  
+
   // API Configuration
   API_PREFIX: '/api'
 }

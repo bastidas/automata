@@ -197,7 +197,7 @@ const GraphViewTab: React.FC = () => {
   const loadGraphData = async () => {
     setLoading(true)
     setError(null)
-    
+
     try {
       const response = await fetch('api/load-last-force-graph', {
         method: 'GET',
@@ -205,18 +205,18 @@ const GraphViewTab: React.FC = () => {
           'Content-Type': 'application/json'
         }
       })
-      
+
       if (!response.ok) {
         throw new Error(`Failed to load graph data: ${response.statusText}`)
       }
-      
+
       const data = await response.json()
-      
+
       // Check if the response contains an error
       if (data.error) {
         throw new Error(data.error)
       }
-      
+
       setGraphData(data)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error occurred')
@@ -230,7 +230,7 @@ const GraphViewTab: React.FC = () => {
       <Typography variant="h4" component="h2" gutterBottom>
         Force Graph View
       </Typography>
-      
+
       <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
         Load and visualize mechanical linkage graphs from saved configurations.
       </Typography>
@@ -240,7 +240,7 @@ const GraphViewTab: React.FC = () => {
           <Typography variant="h6" gutterBottom>
             Load Force Graph Data
           </Typography>
-          
+
           <Button
             variant="contained"
             startIcon={loading ? <CircularProgress size={20} /> : <VisibilityIcon />}
@@ -250,13 +250,13 @@ const GraphViewTab: React.FC = () => {
           >
             {loading ? 'Loading...' : 'Load Most Recent Force Graph'}
           </Button>
-          
+
           {error && (
             <Alert severity="error" sx={{ mb: 2 }}>
               {error}
             </Alert>
           )}
-          
+
           {graphData && (
             <Alert severity="success" sx={{ mb: 2 }}>
               Graph data loaded successfully!
@@ -273,11 +273,11 @@ const GraphViewTab: React.FC = () => {
               <Typography variant="h6" gutterBottom>
                 Graph Visualization
               </Typography>
-              
+
               <Typography variant="body2" sx={{ mb: 2 }}>
                 Interactive force-directed layout. Drag nodes to rearrange the visualization.
               </Typography>
-              
+
               <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2 }}>
                 <ForceGraph data={graphData} />
               </Box>
@@ -298,26 +298,26 @@ const GraphViewTab: React.FC = () => {
                   {showJsonData ? <ExpandLessIcon /> : <ExpandMoreIcon />}
                 </IconButton>
               </Box>
-              
+
               <Typography variant="body2" sx={{ mb: 1 }}>
                 <strong>Nodes:</strong> {graphData.nodes?.length || 0}
               </Typography>
-              
+
               <Typography variant="body2" sx={{ mb: 1 }}>
                 <strong>Links:</strong> {graphData.links?.length || 0}
               </Typography>
-              
+
               <Typography variant="body2" sx={{ mb: 2 }}>
                 <strong>Connections:</strong> {graphData.connections?.length || 0}
               </Typography>
-              
+
               <Collapse in={showJsonData}>
-                <Box sx={{ 
-                  backgroundColor: '#f5f5f5', 
-                  p: 2, 
-                  borderRadius: 1, 
-                  maxHeight: '400px', 
-                  overflow: 'auto' 
+                <Box sx={{
+                  backgroundColor: '#f5f5f5',
+                  p: 2,
+                  borderRadius: 1,
+                  maxHeight: '400px',
+                  overflow: 'auto'
                 }}>
                   <pre style={{ margin: 0, fontSize: '10px' }}>
                     {JSON.stringify(graphData, null, 2)}

@@ -1,13 +1,13 @@
 /* =============================================================================
    ACINONYX THEME - TypeScript Theme Constants
    =============================================================================
-   
+
    Use these constants in React/TypeScript code where CSS variables aren't ideal.
    These values mirror the CSS custom properties in theme.css
-   
+
    USAGE:
    import { theme, colors, statusColors } from './theme'
-   
+
    <Box sx={{ backgroundColor: colors.primary }}>
    ============================================================================= */
 
@@ -19,21 +19,21 @@ export const colors = {
   primary: '#FA8112',
   primaryLight: '#FFB347',
   primaryDark: '#D96A00',
-  
+
   // Background colors
   bgTan: '#FAF3E1',
   bgTanAlt: '#F5E7C6',
   bgTanAccent: '#EAC381',
   bgDark: '#222222',
   bgDarkAlt: '#231A32',
-  
+
   // Text colors
   textPrimary: '#222222',
   textSecondary: '#555555',
   textMuted: '#888888',
   textOnDark: '#FAF3E1',
   textOnPrimary: '#FFFFFF',
-  
+
   // Surface colors
   surface: '#FFFFFF',
   surfaceHover: '#F5F5F5',
@@ -173,16 +173,16 @@ export const muiThemeConfigDark = {
 /* =============================================================================
    CYCLIC COLOR GRADIENTS FOR TRAJECTORY VISUALIZATION
    =============================================================================
-   
+
    These functions generate colors that cycle back to the starting color at the
    end of the trajectory. This creates a smooth visual loop where:
    - At t=0 (start): Starting color
-   - At t=0.5 (middle): Opposite/contrasting color  
+   - At t=0.5 (middle): Opposite/contrasting color
    - At t=1 (end): Returns to starting color (or very close to it)
-   
+
    USAGE:
    const color = getCyclicColor(stepIndex, totalSteps, 'rainbow')
-   
+
    Available cycle types:
    - 'rainbow': Full hue rotation (red → yellow → green → cyan → blue → magenta → red)
    - 'fire': Orange/red → dark → orange/red (warm, dramatic)
@@ -193,24 +193,24 @@ export type ColorCycleType = 'rainbow' | 'fire' | 'glow'
 
 /**
  * Get a color from a cyclic gradient that returns to its starting color.
- * 
+ *
  * @param stepIndex - Current step in the simulation (0 to totalSteps-1)
  * @param totalSteps - Total number of simulation steps
  * @param cycleType - Type of color cycle: 'rainbow', 'fire', or 'glow'
  * @returns RGB color string like 'rgb(255, 128, 0)'
- * 
+ *
  * The color at stepIndex=0 will be nearly identical to the color at stepIndex=totalSteps-1,
  * creating a smooth visual loop for cyclic animations.
  */
 export function getCyclicColor(
-  stepIndex: number, 
-  totalSteps: number, 
+  stepIndex: number,
+  totalSteps: number,
   cycleType: ColorCycleType = 'rainbow'
 ): string {
   // Normalize t to [0, 1) - note we don't reach 1 to avoid exact duplicate at end
   // This ensures step 0 and step (totalSteps-1) are very close but not identical
   const t = stepIndex / Math.max(1, totalSteps)
-  
+
   switch (cycleType) {
     case 'rainbow':
       return getRainbowCycleColor(t)
@@ -225,10 +225,10 @@ export function getCyclicColor(
 
 /**
  * RAINBOW CYCLE: Full hue rotation through the color wheel
- * 
+ *
  * Uses HSL color space with constant saturation and lightness.
  * Hue rotates 360° so the color returns to the starting point.
- * 
+ *
  * t=0.00: Red (hue=0°)
  * t=0.17: Yellow (hue=60°)
  * t=0.33: Green (hue=120°)
@@ -245,10 +245,10 @@ function getRainbowCycleColor(t: number): string {
 
 /**
  * FIRE CYCLE: Orange/red → dark black → orange/red
- * 
+ *
  * Creates a warm, dramatic effect like embers glowing and fading.
  * Uses HSL interpolation through a dark midpoint.
- * 
+ *
  * t=0.00: Bright orange (#FA8112 - our primary color)
  * t=0.25: Deep red/brown
  * t=0.50: Near black (#1A0A00)
@@ -259,11 +259,11 @@ function getFireCycleColor(t: number): string {
   // Use a "bounce" function: 0→1→0 as t goes 0→0.5→1
   // This makes the color go: bright → dark → bright
   const bounce = 1 - Math.abs(2 * t - 1)
-  
+
   // Interpolate from bright orange to near-black
   const startColor = d3.hsl(colors.primary)  // #FA8112 - bright orange
   const darkColor = d3.hsl(15, 0.8, 0.06)    // Very dark reddish-brown
-  
+
   // Interpolate in HSL space for smoother color transitions
   const interpolator = d3.interpolateHsl(startColor.formatHsl(), darkColor.formatHsl())
   return interpolator(bounce)
@@ -271,24 +271,24 @@ function getFireCycleColor(t: number): string {
 
 /**
  * GLOW CYCLE: Orange/red → light/white → orange/red
- * 
+ *
  * Creates a bright, ethereal effect like a pulsing glow.
  * The midpoint is a warm white/cream color.
- * 
+ *
  * t=0.00: Bright orange (#FA8112 - our primary color)
  * t=0.25: Light peach
  * t=0.50: Near white/cream (#FFF8E8)
- * t=0.75: Light peach  
+ * t=0.75: Light peach
  * t=1.00: Bright orange (returns to start)
  */
 function getGlowCycleColor(t: number): string {
   // Use a "bounce" function: 0→1→0 as t goes 0→0.5→1
   const bounce = 1 - Math.abs(2 * t - 1)
-  
+
   // Interpolate from bright orange to warm white
   const startColor = d3.hsl(colors.primary)       // #FA8112 - bright orange
   const lightColor = d3.hsl(40, 1.0, 0.95)        // Warm cream/white
-  
+
   // Interpolate in HSL space
   const interpolator = d3.interpolateHsl(startColor.formatHsl(), lightColor.formatHsl())
   return interpolator(bounce)
@@ -297,7 +297,7 @@ function getGlowCycleColor(t: number): string {
 /**
  * Legacy function: Original trajectory color (non-cyclic, for backward compatibility)
  * Blue (start) → Cyan → Green → Yellow → Red (end)
- * 
+ *
  * @deprecated Use getCyclicColor() instead for cyclic trajectories
  */
 export function getLegacyTrajectoryColor(stepIndex: number, totalSteps: number): string {
@@ -311,7 +311,7 @@ export function getLegacyTrajectoryColor(stepIndex: number, totalSteps: number):
 /**
  * Legacy function: Spectral colormap approximation (non-cyclic)
  * Similar to matplotlib's Spectral colormap.
- * 
+ *
  * @deprecated Use getCyclicColor() instead for cyclic trajectories
  */
 export function getSpectralColor(t: number): string {
@@ -352,4 +352,3 @@ export const theme = {
 } as const
 
 export default theme
-
