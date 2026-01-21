@@ -114,6 +114,8 @@ export interface TrajectoryRenderData {
 export interface TrajectoriesRendererProps {
   trajectories: TrajectoryRenderData[]
   trajectoryDotSize: number
+  trajectoryDotOutline: boolean
+  trajectoryDotOpacity: number
   trajectoryStyle: TrajectoryStyle
   trajectoryColorCycle: ColorCycleType
   jointColors: JointColors

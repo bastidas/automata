@@ -4,7 +4,7 @@
 import React from 'react'
 import {
   Box, Typography, FormControlLabel, Switch, TextField, Select,
-  MenuItem, FormControl, Divider, Chip
+  MenuItem, FormControl, Divider
 } from '@mui/material'
 import type { ColorCycleType } from '../../../theme'
 import {
@@ -55,10 +55,10 @@ export interface SettingsToolbarProps {
   setLinkThickness: (thickness: number) => void
   trajectoryDotSize: number
   setTrajectoryDotSize: (size: number) => void
-  selectionHighlightColor: SelectionHighlightColor
-  setSelectionHighlightColor: (color: SelectionHighlightColor) => void
-  showMeasurementUnits: boolean
-  setShowMeasurementUnits: (show: boolean) => void
+  trajectoryDotOutline: boolean
+  setTrajectoryDotOutline: (show: boolean) => void
+  trajectoryDotOpacity: number
+  setTrajectoryDotOpacity: (opacity: number) => void
 
   // Animation
   trajectoryStyle: TrajectoryStyle
@@ -79,8 +79,8 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
   jointSize, setJointSize,
   linkThickness, setLinkThickness,
   trajectoryDotSize, setTrajectoryDotSize,
-  selectionHighlightColor, setSelectionHighlightColor,
-  showMeasurementUnits, setShowMeasurementUnits,
+  trajectoryDotOutline, setTrajectoryDotOutline,
+  trajectoryDotOpacity, setTrajectoryDotOpacity,
   trajectoryStyle, setTrajectoryStyle
 }) => {
   return (
@@ -274,7 +274,7 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
 
       <Box sx={{ mb: 1.5, opacity: 0.5 }}>
         <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mb: 0.5 }}>
-          Grid Spacing (units) <Chip label="TODO" size="small" sx={{ ml: 0.5, height: 16, fontSize: '0.6rem' }} />
+          Grid Spacing (units) <span style={{ fontSize: '0.6rem', opacity: 0.6 }}>(TODO)</span>
         </Typography>
         <FormControl fullWidth size="small" disabled>
           <Select value={20} sx={{ fontSize: '0.85rem' }}>
@@ -289,7 +289,7 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
         control={<Switch size="small" disabled />}
         label={
           <Typography variant="body2" sx={{ fontSize: '0.8rem', color: 'text.disabled' }}>
-            Snap to Grid <Chip label="TODO" size="small" sx={{ ml: 0.5, height: 16, fontSize: '0.6rem' }} />
+            Snap to Grid <span style={{ fontSize: '0.6rem', opacity: 0.6 }}>(TODO)</span>
           </Typography>
         }
         sx={{ mb: 1, ml: 0, opacity: 0.5 }}
@@ -350,37 +350,27 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
         </Box>
       </Box>
 
+      <FormControlLabel
+        control={<Switch checked={trajectoryDotOutline} onChange={(e) => setTrajectoryDotOutline(e.target.checked)} size="small" />}
+        label={<Typography variant="body2" sx={{ fontSize: '0.8rem' }}>Trajectory Dot Outline</Typography>}
+        sx={{ mb: 0.5, ml: 0 }}
+      />
+
       <Box sx={{ mb: 1.5 }}>
         <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5 }}>
-          Selection Highlight
+          Trajectory Dot Opacity: {Math.round(trajectoryDotOpacity * 100)}%
         </Typography>
-        <Box sx={{ display: 'flex', gap: 0.5 }}>
-          {(['blue', 'orange', 'green', 'purple'] as const).map((color) => {
-            const colorMap = { blue: '#1976d2', orange: '#FA8112', green: '#2e7d32', purple: '#9c27b0' }
-            return (
-              <Box
-                key={color}
-                onClick={() => setSelectionHighlightColor(color)}
-                sx={{
-                  width: 28, height: 28, borderRadius: 1,
-                  bgcolor: colorMap[color],
-                  cursor: 'pointer',
-                  border: selectionHighlightColor === color ? '3px solid #fff' : '1px solid #ccc',
-                  boxShadow: selectionHighlightColor === color ? `0 0 0 2px ${colorMap[color]}` : 'none',
-                  '&:hover': { transform: 'scale(1.1)' },
-                  transition: 'all 0.15s ease'
-                }}
-              />
-            )
-          })}
+        <Box sx={{ px: 1 }}>
+          <input
+            type="range"
+            min={50}
+            max={100}
+            value={Math.round(trajectoryDotOpacity * 100)}
+            onChange={(e) => setTrajectoryDotOpacity(parseInt(e.target.value) / 100)}
+            style={{ width: '100%', accentColor: '#FA8112' }}
+          />
         </Box>
       </Box>
-
-      <FormControlLabel
-        control={<Switch checked={showMeasurementUnits} onChange={(e) => setShowMeasurementUnits(e.target.checked)} size="small" />}
-        label={<Typography variant="body2" sx={{ fontSize: '0.8rem' }}>Show Measurement Units</Typography>}
-        sx={{ mb: 1, ml: 0 }}
-      />
 
       <Divider sx={{ my: 1.5 }} />
 
@@ -402,20 +392,6 @@ export const SettingsToolbar: React.FC<SettingsToolbarProps> = ({
             <MenuItem value="dots">Dots only</MenuItem>
             <MenuItem value="line">Line only</MenuItem>
             <MenuItem value="both">Dots + Line</MenuItem>
-          </Select>
-        </FormControl>
-      </Box>
-
-      {/* Disabled/TODO items */}
-      <Box sx={{ mb: 1.5, opacity: 0.5 }}>
-        <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mb: 0.5 }}>
-          Playback Speed <Chip label="TODO" size="small" sx={{ ml: 0.5, height: 16, fontSize: '0.6rem' }} />
-        </Typography>
-        <FormControl fullWidth size="small" disabled>
-          <Select value="1x" sx={{ fontSize: '0.85rem' }}>
-            <MenuItem value="0.5x">0.5x</MenuItem>
-            <MenuItem value="1x">1x</MenuItem>
-            <MenuItem value="2x">2x</MenuItem>
           </Select>
         </FormControl>
       </Box>

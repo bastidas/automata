@@ -17,6 +17,8 @@ function renderTrajectory(
 ): JSX.Element | null {
   const {
     trajectoryDotSize,
+    trajectoryDotOutline,
+    trajectoryDotOpacity,
     trajectoryStyle,
     trajectoryColorCycle,
     jointColors,
@@ -73,7 +75,7 @@ function renderTrajectory(
                   `${i === 0 ? 'M' : 'L'} ${unitsToPixels(pos[0])} ${unitsToPixels(pos[1])}`
                 ).join(' ')}
               fill="none"
-              stroke="rgba(33, 150, 243, 0.3)"
+              stroke="rgba(120, 120, 120, 0.5)"
               strokeWidth={2}
               strokeDasharray="4,2"
             />
@@ -87,9 +89,9 @@ function renderTrajectory(
               cy={unitsToPixels(pos[1])}
               r={trajectoryDotSize}
               fill={getTrajectoryColor(stepIndex, validPositions.length)}
-              stroke="#fff"
-              strokeWidth={1}
-              opacity={0.8}
+              stroke={trajectoryDotOutline ? '#fff' : 'none'}
+              strokeWidth={trajectoryDotOutline ? 1 : 0}
+              opacity={trajectoryDotOpacity}
             >
               <title>{`${jointName} step ${stepIndex + 1}/${validPositions.length}: (${pos[0]?.toFixed(1) ?? '?'}, ${pos[1]?.toFixed(1) ?? '?'})`}</title>
             </circle>

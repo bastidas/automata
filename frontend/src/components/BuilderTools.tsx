@@ -30,6 +30,7 @@ export interface DraggableToolbarProps {
   initialPosition?: ToolbarPosition
   onClose: () => void
   onPositionChange?: (id: string, position: ToolbarPosition) => void
+  onInteract?: () => void  // Called when user clicks/interacts with toolbar
   minWidth?: number
   maxHeight?: number
 }
@@ -42,6 +43,7 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
   initialPosition = { x: 100, y: 100 },
   onClose,
   onPositionChange,
+  onInteract,
   minWidth = 200,
   maxHeight = 400
 }) => {
@@ -92,6 +94,7 @@ export const DraggableToolbar: React.FC<DraggableToolbarProps> = ({
     <Paper
       ref={toolbarRef}
       elevation={6}
+      onMouseDownCapture={() => onInteract?.()}
       sx={{
         position: 'absolute',
         left: position.x,
@@ -178,7 +181,7 @@ export interface ToolbarConfig {
 export const TOOLBAR_CONFIGS: ToolbarConfig[] = [
   { id: 'tools', title: 'Tools', icon: '⚒', defaultPosition: { x: 8, y: 60 } },        // Full left, below toggle buttons
   { id: 'more', title: 'More', icon: '≡', defaultPosition: { x: 8, y: 370 } },         // Full left, well below Tools
-  { id: 'optimize', title: 'Optimize', icon: '✦', defaultPosition: { x: 240, y: 60 } }, // Optimization panel
+  { id: 'optimize', title: 'Optimize', icon: '✦', defaultPosition: { x: 8, y: -630 } }, // Bottom left (negative y = from bottom)
   { id: 'links', title: 'Links', icon: '—', defaultPosition: { x: -220, y: 8 } },      // Far right edge (negative = from right)
   { id: 'nodes', title: 'Nodes', icon: '○', defaultPosition: { x: -220, y: 500 } },    // Below Links on far right
   { id: 'settings', title: 'Settings', icon: '⚙', defaultPosition: { x: 500, y: 60 } } // Settings panel
@@ -187,6 +190,8 @@ export const TOOLBAR_CONFIGS: ToolbarConfig[] = [
 export interface ToolbarToggleButtonsProps {
   openToolbars: Set<string>
   onToggleToolbar: (id: string) => void
+  darkMode?: boolean
+  onInteract?: () => void  // Called when user clicks/interacts with toolbar buttons
 }
 
 /**
@@ -197,12 +202,15 @@ export interface ToolbarToggleButtonsProps {
  */
 export const ToolbarToggleButtons: React.FC<ToolbarToggleButtonsProps> = ({
   openToolbars,
-  onToggleToolbar
+  onToggleToolbar,
+  darkMode = false,
+  onInteract
 }) => {
   return (
     <Box
       id="toolbar-toggle-buttons-container"
       className="toolbar-toggle-buttons-container"
+      onMouseDownCapture={() => onInteract?.()}
       sx={{
         position: 'absolute',
         left: 8,
@@ -211,13 +219,13 @@ export const ToolbarToggleButtons: React.FC<ToolbarToggleButtonsProps> = ({
         flexDirection: 'row',  // Horizontal layout
         gap: 0.75,
         zIndex: 1200,
-        // Subtle container styling
-        backgroundColor: 'rgba(255, 255, 255, 0.7)',
+        // Subtle container styling - dark mode aware
+        backgroundColor: darkMode ? 'rgba(40, 40, 40, 0.9)' : 'rgba(255, 255, 255, 0.7)',
         backdropFilter: 'blur(8px)',
         borderRadius: 2,
         padding: '6px 8px',
-        border: '1px solid rgba(0, 0, 0, 0.08)',
-        boxShadow: '0 2px 12px rgba(0, 0, 0, 0.06)'
+        border: darkMode ? '1px solid rgba(255, 255, 255, 0.1)' : '1px solid rgba(0, 0, 0, 0.08)',
+        boxShadow: darkMode ? '0 2px 12px rgba(0, 0, 0, 0.3)' : '0 2px 12px rgba(0, 0, 0, 0.06)'
       }}
     >
       {TOOLBAR_CONFIGS.map(config => {
@@ -231,14 +239,22 @@ export const ToolbarToggleButtons: React.FC<ToolbarToggleButtonsProps> = ({
               height: 36,
               borderRadius: 1.5,
               fontSize: '1.1rem',
-              backgroundColor: isOpen ? 'primary.main' : 'rgba(255,255,255,0.9)',
-              color: isOpen ? 'white' : 'text.primary',
+              backgroundColor: isOpen
+                ? 'primary.main'
+                : darkMode ? 'rgba(60, 60, 60, 0.9)' : 'rgba(255,255,255,0.9)',
+              color: isOpen
+                ? 'white'
+                : darkMode ? '#e0e0e0' : 'text.primary',
               border: '1px solid',
-              borderColor: isOpen ? 'primary.main' : 'rgba(0,0,0,0.1)',
+              borderColor: isOpen
+                ? 'primary.main'
+                : darkMode ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0,0,0,0.1)',
               boxShadow: isOpen ? '0 2px 6px rgba(250, 129, 18, 0.3)' : 'none',
               transition: 'all 0.15s ease',
               '&:hover': {
-                backgroundColor: isOpen ? 'primary.dark' : 'rgba(250, 129, 18, 0.1)',
+                backgroundColor: isOpen
+                  ? 'primary.dark'
+                  : darkMode ? 'rgba(250, 129, 18, 0.2)' : 'rgba(250, 129, 18, 0.1)',
                 borderColor: 'primary.main',
                 transform: 'translateY(-1px)'
               }
@@ -333,8 +349,8 @@ export const TOOLS: ToolInfo[] = [
   {
     id: 'merge',
     label: 'Merge Polygon',
-    icon: '⊗',
-    description: 'Merge a polygon with the enclosed link',
+    icon: '⋒',
+    description: 'Merge a polygon with an enclosed link, or click a merged polygon to unmerge it',
     shortcut: 'E'
   },
   {
@@ -522,7 +538,7 @@ export interface DrawnObject {
   id: string
   type: DrawnObjectType
   name: string
-  points: [number, number][]     // Vertices for polygon/path
+  points: [number, number][]     // Vertices for polygon/path (original positions at creation/merge time)
   fillColor: string
   strokeColor: string
   strokeWidth: number
@@ -530,6 +546,9 @@ export interface DrawnObject {
   closed: boolean                // Whether the shape is closed (polygon) or open (path)
   attachment?: DrawnObjectAttachment  // If attached to a link, this defines the relationship
   mergedLinkName?: string        // If merged with a link, the link's name
+  // Rigid attachment: store link positions at merge time for transformation
+  mergedLinkOriginalStart?: [number, number]  // Link start position when merged
+  mergedLinkOriginalEnd?: [number, number]    // Link end position when merged
   metadata?: Record<string, unknown>  // For future extensibility
 }
 
@@ -1106,7 +1125,19 @@ interface FooterToolbarProps {
   darkMode?: boolean
 }
 
-const getStatusColor = (type: StatusType): string => {
+const getStatusColor = (type: StatusType, darkMode: boolean = false): string => {
+  if (darkMode) {
+    // Brighter colors for dark mode - near white for readability
+    switch (type) {
+      case 'info': return '#90caf9'      // Light blue
+      case 'action': return '#ffb74d'    // Light orange
+      case 'success': return '#a5d6a7'   // Light green
+      case 'warning': return '#ffcc80'   // Light amber
+      case 'error': return '#ef9a9a'     // Light red
+      default: return '#e0e0e0'
+    }
+  }
+  // Light mode - darker colors
   switch (type) {
     case 'info': return statusColors.nominalDark
     case 'action': return colors.primary
@@ -1117,7 +1148,18 @@ const getStatusColor = (type: StatusType): string => {
   }
 }
 
-const getStatusBgColor = (type: StatusType): string => {
+const getStatusBgColor = (type: StatusType, darkMode: boolean = false): string => {
+  if (darkMode) {
+    // Slightly more opaque backgrounds for dark mode
+    switch (type) {
+      case 'info': return 'rgba(144, 202, 249, 0.15)'
+      case 'action': return 'rgba(255, 183, 77, 0.18)'
+      case 'success': return 'rgba(165, 214, 167, 0.15)'
+      case 'warning': return 'rgba(255, 204, 128, 0.15)'
+      case 'error': return 'rgba(239, 154, 154, 0.15)'
+      default: return 'transparent'
+    }
+  }
   switch (type) {
     case 'info': return 'rgba(25, 118, 210, 0.12)'
     case 'action': return 'rgba(255, 140, 0, 0.15)'
@@ -1183,7 +1225,7 @@ const getToolHint = (
       if (mergePolygonState?.step === 'link_selected') {
         return 'Now click a polygon to merge with link'
       }
-      return 'Select a link or a polygon to begin merge'
+      return 'Click a polygon or link to merge • Click merged polygon to unmerge'
     case 'add_joint':
       return 'Click on a link to add a joint'
     case 'draw_path':
@@ -1289,7 +1331,9 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
             px: 1.5,
             py: 0.25,
             borderRadius: 1,
-            backgroundColor: getStatusBgColor(statusMessage.type)
+            // In dark mode: solid dark background for text readability
+            backgroundColor: darkMode ? 'rgba(20, 20, 20, 0.95)' : getStatusBgColor(statusMessage.type, darkMode),
+            border: darkMode ? '1px solid rgba(255, 255, 255, 0.1)' : 'none'
           }}
         >
           <Box
@@ -1297,14 +1341,15 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
               width: 5,
               height: 5,
               borderRadius: '50%',
-              backgroundColor: getStatusColor(statusMessage.type)
+              backgroundColor: getStatusColor(statusMessage.type, darkMode)
             }}
           />
           <Typography
             sx={{
               fontSize: '0.75rem',
               fontWeight: 500,
-              color: getStatusColor(statusMessage.type)
+              // In dark mode: use white text for maximum readability
+              color: darkMode ? '#ffffff' : getStatusColor(statusMessage.type, darkMode)
             }}
           >
             {statusMessage.text}
@@ -1334,14 +1379,16 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
             px: 1.5,
             py: 0.25,
             borderRadius: 1,
-            backgroundColor: darkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)'
+            backgroundColor: darkMode ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.04)'
           }}
         >
           <Typography
+            component="span"
             sx={{
               fontSize: '0.7rem',
-              color: darkMode ? '#999' : 'text.secondary',
-              fontStyle: 'italic'
+              fontStyle: 'italic',
+              // Use !important to override MUI defaults in dark mode
+              color: darkMode ? '#ffffff !important' : 'text.secondary'
             }}
           >
             {toolHint}
@@ -1351,11 +1398,11 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
 
       {/* RIGHT: Counts + Logo */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 180, justifyContent: 'flex-end' }}>
-        <Typography sx={{ fontSize: '0.7rem', color: darkMode ? '#999' : 'text.secondary' }}>
-          <strong style={{ color: darkMode ? '#ccc' : 'inherit' }}>{jointCount}</strong> joints
+        <Typography sx={{ fontSize: '0.7rem', color: darkMode ? '#bbb' : 'text.secondary' }}>
+          <strong style={{ color: darkMode ? '#e0e0e0' : 'inherit' }}>{jointCount}</strong> joints
         </Typography>
-        <Typography sx={{ fontSize: '0.7rem', color: darkMode ? '#999' : 'text.secondary' }}>
-          <strong style={{ color: darkMode ? '#ccc' : 'inherit' }}>{linkCount}</strong> links
+        <Typography sx={{ fontSize: '0.7rem', color: darkMode ? '#bbb' : 'text.secondary' }}>
+          <strong style={{ color: darkMode ? '#e0e0e0' : 'inherit' }}>{linkCount}</strong> links
         </Typography>
         <Box sx={{ width: '1px', height: 18, backgroundColor: darkMode ? '#444' : '#e0e0e0' }} />
         <img
@@ -1380,6 +1427,65 @@ export const FooterToolbar: React.FC<FooterToolbarProps> = ({
 
 // Distance threshold in units for snapping to existing joints
 export const JOINT_SNAP_THRESHOLD = 5.0
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RIGID TRANSFORMATION UTILITIES
+// For making merged polygons move with their attached links
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Transform polygon points based on how a link has moved/rotated.
+ * This enables merged polygons to move rigidly with their attached links.
+ *
+ * @param points - Original polygon points (at merge time)
+ * @param originalStart - Link start position at merge time
+ * @param originalEnd - Link end position at merge time
+ * @param currentStart - Link start position now (possibly animated)
+ * @param currentEnd - Link end position now (possibly animated)
+ * @returns Transformed polygon points
+ */
+export const transformPolygonPoints = (
+  points: [number, number][],
+  originalStart: [number, number],
+  originalEnd: [number, number],
+  currentStart: [number, number],
+  currentEnd: [number, number]
+): [number, number][] => {
+  // Calculate original link center and angle
+  const origCenterX = (originalStart[0] + originalEnd[0]) / 2
+  const origCenterY = (originalStart[1] + originalEnd[1]) / 2
+  const origAngle = Math.atan2(
+    originalEnd[1] - originalStart[1],
+    originalEnd[0] - originalStart[0]
+  )
+
+  // Calculate current link center and angle
+  const currCenterX = (currentStart[0] + currentEnd[0]) / 2
+  const currCenterY = (currentStart[1] + currentEnd[1]) / 2
+  const currAngle = Math.atan2(
+    currentEnd[1] - currentStart[1],
+    currentEnd[0] - currentStart[0]
+  )
+
+  // Compute rotation delta
+  const deltaAngle = currAngle - origAngle
+
+  // Transform each point
+  return points.map(([px, py]): [number, number] => {
+    // 1. Translate to origin (relative to original link center)
+    const relX = px - origCenterX
+    const relY = py - origCenterY
+
+    // 2. Rotate by delta angle
+    const cos = Math.cos(deltaAngle)
+    const sin = Math.sin(deltaAngle)
+    const rotX = relX * cos - relY * sin
+    const rotY = relX * sin + relY * cos
+
+    // 3. Translate to current link center
+    return [rotX + currCenterX, rotY + currCenterY]
+  })
+}
 
 /**
  * Calculate distance between two points
@@ -1772,7 +1878,7 @@ export const JointEditModal: React.FC<JointEditModalProps> = ({
                   color: darkMode ? '#777' : '#888',
                   fontStyle: 'italic'
                 }}>
-                  Note: "Show/Hide All Paths" in the More toolbar controls global path visibility
+                  Note: The path visibility button (◉/○) in the Animate bar at the bottom controls global visibility for all paths
                 </Typography>
               </Box>
             )}

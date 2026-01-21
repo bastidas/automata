@@ -364,6 +364,7 @@ export function useSimulation({
   /** Run simulation against the backend */
   const runSimulation = useCallback(async () => {
     if (!hasCrankJoint(linkageDoc)) {
+      console.warn('[Simulation] Cannot simulate: no Crank joint defined in document')
       showStatus?.('Cannot simulate: no Crank joint defined', 'warning', 2000)
       return
     }
@@ -371,6 +372,7 @@ export function useSimulation({
     try {
       setIsSimulating(true)
       onSimulationStart?.()
+      console.log('[Simulation] Starting trajectory computation with', simulationSteps, 'steps')
       showStatus?.(`Simulating ${simulationSteps} steps...`, 'action')
 
       // Send document directly - backend handles both formats
@@ -383,7 +385,10 @@ export function useSimulation({
         })
       })
 
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      if (!response.ok) {
+        console.error('[Simulation] HTTP error:', response.status, response.statusText)
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
       const result = await response.json()
 
       if (result.status === 'success') {
@@ -392,16 +397,19 @@ export function useSimulation({
           nSteps: result.n_steps,
           jointTypes: result.joint_types || {}
         }
+        console.log('[Simulation] Success:', result.n_steps, 'steps,', Object.keys(result.trajectories).length, 'joints')
         setTrajectoryData(data)
         onSimulationComplete?.(data)
         showStatus?.(`Simulation complete: ${result.n_steps} steps`, 'success', 1500)
       } else {
         const errorMsg = result.message || 'Simulation failed'
+        console.error('[Simulation] Backend returned error:', errorMsg, result)
         onSimulationError?.(errorMsg)
         showStatus?.(errorMsg, 'error', 3000)
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Simulation error'
+      console.error('[Simulation] Exception during trajectory computation:', error)
       onSimulationError?.(errorMsg)
       showStatus?.(`Simulation error: ${errorMsg}`, 'error', 3000)
     } finally {

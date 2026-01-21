@@ -310,6 +310,81 @@ html, body {
   border-top-color: #444 !important;
 }
 
+/* Footer toolbar text MUST be white in dark mode */
+.dark-mode .footer-toolbar,
+.dark-mode .footer-toolbar * {
+  color: #ffffff !important;
+}
+
+.dark-mode .footer-toolbar .MuiTypography-root {
+  color: #ffffff !important;
+}
+
+/* Slightly muted for secondary text like shortcuts */
+.dark-mode .footer-toolbar [class*="text.secondary"],
+.dark-mode .footer-toolbar .MuiTypography-colorTextSecondary {
+  color: #bbbbbb !important;
+}
+
+/* =============================================================================
+   DARK MODE SCROLLBARS
+   ============================================================================= */
+
+/* WebKit browsers (Chrome, Safari, Edge) */
+.dark-mode *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dark-mode *::-webkit-scrollbar-track {
+  background: #2a2a2a;
+  border-radius: 4px;
+}
+
+.dark-mode *::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 4px;
+}
+
+.dark-mode *::-webkit-scrollbar-thumb:hover {
+  background: #666;
+}
+
+/* Firefox */
+.dark-mode * {
+  scrollbar-color: #555 #2a2a2a;
+  scrollbar-width: thin;
+}
+
+/* Light mode scrollbars for consistency */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}
+
+/* =============================================================================
+   ANIMATE TOOLBAR DARK MODE
+   ============================================================================= */
+
+.dark-mode .animate-toolbar {
+  background-color: rgba(30, 30, 30, 0.95) !important;
+  border-color: rgba(255, 255, 255, 0.15) !important;
+}
+
 /* =============================================================================
    UTILITY CLASSES
    ============================================================================= */

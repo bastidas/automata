@@ -159,7 +159,7 @@ function App() {
             }}
           >
             <Tab label="Pylink Builder" />
-            <Tab label="Status & About" />
+            <Tab label="Help & About" />
           </Tabs>
         </Box>
 

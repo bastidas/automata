@@ -36,6 +36,7 @@ from pylink_tools.kinematic import compute_trajectory
 from pylink_tools.optimize import analyze_convergence
 from pylink_tools.optimize import apply_dimensions
 from pylink_tools.optimize import extract_dimensions
+from pylink_tools.optimize import extract_dimensions_from_edges
 from pylink_tools.optimize import run_pso_optimization
 from pylink_tools.optimize import run_pylinkage_pso
 from pylink_tools.optimize import run_scipy_optimization
@@ -339,65 +340,6 @@ def verify_mechanism_viable(pylink_data: dict, target_joint: str = None) -> bool
         return True
     except Exception:
         return False
-
-
-def extract_dimensions_from_edges(
-    pylink_data: dict,
-    bounds_factor: float = 2.0,
-    min_length: float = 5.0,
-    exclude_edges: set[str] = None,
-):
-    """
-    Extract optimizable dimensions from linkage edges format.
-
-    This handles the 'linkage.edges' format used by complex mechanisms,
-    where each edge has a 'distance' property.
-
-    Args:
-        pylink_data: Mechanism data with 'linkage.edges' structure
-        bounds_factor: Multiplier for bounds (e.g., 2.0 = [val/2, val*2])
-        min_length: Minimum allowed link length
-        exclude_edges: Edge IDs to exclude (e.g., {'ground'})
-
-    Returns:
-        DimensionSpec with edge distances as optimizable parameters
-    """
-    from pylink_tools.optimization_types import DimensionSpec
-
-    if exclude_edges is None:
-        exclude_edges = {'ground'}  # Ground link is typically fixed
-
-    linkage = pylink_data.get('linkage', {})
-    edges = linkage.get('edges', {})
-
-    names = []
-    initial_values = []
-    bounds = []
-    edge_mapping = {}  # For hypergraph format
-
-    for edge_id, edge_data in edges.items():
-        if edge_id in exclude_edges:
-            continue
-
-        distance = edge_data.get('distance', 1.0)
-        dim_name = f'{edge_id}_distance'
-
-        # Compute bounds
-        lower = max(min_length, distance / bounds_factor)
-        upper = distance * bounds_factor
-
-        names.append(dim_name)
-        initial_values.append(distance)
-        bounds.append((lower, upper))
-        edge_mapping[dim_name] = (edge_id, 'distance')
-
-    return DimensionSpec(
-        names=names,
-        initial_values=initial_values,
-        bounds=bounds,
-        joint_mapping={},  # Empty for hypergraph format
-        edge_mapping=edge_mapping,  # Used for linkage.edges format
-    )
 
 
 def apply_edge_dimensions(

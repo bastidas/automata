@@ -2802,7 +2802,7 @@ const PylinkBuilderTab: React.FC = () => {
                       `${i === 0 ? 'M' : 'L'} ${unitsToPixels(pos[0])} ${unitsToPixels(pos[1])}`
                     ).join(' ')}
                   fill="none"
-                  stroke="rgba(33, 150, 243, 0.3)"
+                  stroke="rgba(120, 120, 120, 0.5)"
                   strokeWidth={2}
                   strokeDasharray="4,2"
                 />

@@ -11,12 +11,7 @@ This script demonstrates the full optimization workflow:
 KEY INSIGHT: How to Create an Achievable Target
 =============================================================================
 
-The WRONG approach (what we had before):
-  - Take original trajectory and SHIFT it by (10, 5)
-  - This trajectory is IMPOSSIBLE to achieve because the fixed pivots can't move!
-  - The optimizer can't reduce error below the shift distance.
-
-The RIGHT approach:
+approach:
   - RANDOMIZE the link dimensions (e.g., ±30% of original)
   - Compute the trajectory with those randomized dimensions
   - Use THAT as the target
@@ -296,7 +291,7 @@ def main():
     # Store initial dimensions
     initial_dims = {name: val for name, val in zip(dim_spec.names, dim_spec.initial_values)}
 
-    print('\nOptimizable dimensions:')
+    print(f'\nOptimizable dimensions:')
     for name, initial, bounds in zip(dim_spec.names, dim_spec.initial_values, dim_spec.bounds):
         print(f'  - {name}: {initial:.2f} (bounds: {bounds[0]:.2f} - {bounds[1]:.2f})')
 

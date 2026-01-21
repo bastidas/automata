@@ -141,6 +141,11 @@ export function useKeyboardShortcuts(config: KeyboardShortcutsConfig) {
     const tool = tools.find(t => t.shortcut === key)
 
     if (tool) {
+      // Auto-pause animation when switching tools
+      if (state.isAnimating) {
+        actions.pauseAnimation()
+      }
+
       // Cancel ongoing actions if switching tools
       if (state.isLinkDrawing && tool.id !== 'draw_link') {
         resetters.resetLinkCreation()

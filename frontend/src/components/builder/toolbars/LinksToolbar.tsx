@@ -37,7 +37,7 @@ export const LinksToolbar: React.FC<LinksToolbarProps> = ({
       {Object.entries(links).length === 0 ? (
         <Box sx={{ p: 2, textAlign: 'center' }}>
           <Typography variant="caption" color="text.secondary">No links yet</Typography>
-          <Typography variant="caption" display="block" color="text.disabled">Use Draw Link tool (L)</Typography>
+          <Typography variant="caption" display="block" color="text.disabled">Use Create Link tool (C)</Typography>
         </Box>
       ) : (
         Object.entries(links).map(([linkName, linkMeta], index) => {

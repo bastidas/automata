@@ -66,7 +66,8 @@ export {
   NodesToolbar,
   MoreToolbar,
   SettingsToolbar,
-  OptimizationToolbar
+  OptimizationToolbar,
+  AnimateToolbar
 } from './toolbars'
 
 // Toolbar prop types
@@ -77,6 +78,8 @@ export type {
   MoreToolbarProps,
   SettingsToolbarProps,
   OptimizationToolbarProps,
+  AnimateToolbarProps,
+  AnimationState,
   // Toolbar-specific types
   CanvasBgColor,
   TrajectoryStyle,

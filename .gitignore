@@ -131,7 +131,9 @@ automata/user
 
 # Node.js
 automata/frontend/node_modules/
+automata/frontend/dist/
 frontend/node_modules/
+frontend/dist/
 .vite
 
 

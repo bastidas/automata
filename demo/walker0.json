@@ -1,0 +1,488 @@
+{
+  "name": "untitled",
+  "version": "2.0.0",
+  "linkage": {
+    "name": "untitled",
+    "nodes": {
+      "joint_0": {
+        "id": "joint_0",
+        "position": [
+          160,
+          59.780208587646484
+        ],
+        "role": "fixed",
+        "jointType": "revolute",
+        "name": "joint_0"
+      },
+      "joint_1": {
+        "id": "joint_1",
+        "position": [
+          160,
+          68.78020858764648
+        ],
+        "role": "crank",
+        "jointType": "revolute",
+        "name": "joint_1",
+        "angle": 1.6213860355642806,
+        "initialAngle": 1.6213860355642806
+      },
+      "joint_2": {
+        "id": "joint_2",
+        "position": [
+          131.16666666666666,
+          80.28020858764648
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_2",
+        "angle": 2.6984900986223868,
+        "initialAngle": 2.6984900986223868
+      },
+      "joint_3": {
+        "id": "joint_3",
+        "position": [
+          120.33333333333333,
+          59.94687525431315
+        ],
+        "role": "fixed",
+        "jointType": "revolute",
+        "name": "joint_3"
+      },
+      "joint_4": {
+        "id": "joint_4",
+        "position": [
+          119.33333333333333,
+          99.94687525431316
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_4"
+      },
+      "joint_5": {
+        "id": "joint_5",
+        "position": [
+          99.5,
+          99.61354192097981
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_5"
+      },
+      "joint_6": {
+        "id": "joint_6",
+        "position": [
+          79.83333333333333,
+          119.94687525431316
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_6"
+      },
+      "joint_11": {
+        "id": "joint_11",
+        "position": [
+          141.16666666666666,
+          100.11354192097981
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_11"
+      },
+      "joint_8": {
+        "id": "joint_8",
+        "position": [
+          79.33333333333333,
+          159.78020858764648
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_8"
+      },
+      "joint_9": {
+        "id": "joint_9",
+        "position": [
+          179.83333333333334,
+          100.11354192097981
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_9"
+      },
+      "joint_10": {
+        "id": "joint_10",
+        "position": [
+          189.66666666666666,
+          79.78020858764648
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_10"
+      },
+      "joint_12": {
+        "id": "joint_12",
+        "position": [
+          200.33333333333334,
+          59.780208587646484
+        ],
+        "role": "fixed",
+        "jointType": "revolute",
+        "name": "joint_12"
+      },
+      "joint_13": {
+        "id": "joint_13",
+        "position": [
+          201.16666666666666,
+          101.11354192097981
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_13"
+      },
+      "joint_14": {
+        "id": "joint_14",
+        "position": [
+          221.33333333333334,
+          100.44687525431316
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_14"
+      },
+      "joint_15": {
+        "id": "joint_15",
+        "position": [
+          240,
+          161.44687525431314
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_15"
+      },
+      "joint_16": {
+        "id": "joint_16",
+        "position": [
+          239.5,
+          120.11354192097981
+        ],
+        "role": "follower",
+        "jointType": "revolute",
+        "name": "joint_16"
+      }
+    },
+    "edges": {
+      "link_0": {
+        "id": "link_0",
+        "source": "joint_0",
+        "target": "joint_1",
+        "distance": 9
+      },
+      "link_1": {
+        "id": "link_1",
+        "source": "joint_1",
+        "target": "joint_2",
+        "distance": 31.04208612691988
+      },
+      "link_2": {
+        "id": "link_2",
+        "source": "joint_2",
+        "target": "joint_3",
+        "distance": 23.039217772215174
+      },
+      "link_3": {
+        "id": "link_3",
+        "source": "joint_3",
+        "target": "joint_4",
+        "distance": 40.012498047485124
+      },
+      "link_4": {
+        "id": "link_4",
+        "source": "joint_4",
+        "target": "joint_2",
+        "distance": 22.952245109260133
+      },
+      "link_5": {
+        "id": "link_5",
+        "source": "joint_3",
+        "target": "joint_5",
+        "distance": 44.80482364904723
+      },
+      "link_6": {
+        "id": "link_6",
+        "source": "joint_5",
+        "target": "joint_4",
+        "distance": 19.83613425600417
+      },
+      "link_7": {
+        "id": "link_7",
+        "source": "joint_5",
+        "target": "joint_6",
+        "distance": 28.288199345702846
+      },
+      "link_8": {
+        "id": "link_8",
+        "source": "joint_6",
+        "target": "joint_4",
+        "distance": 44.27471061452576
+      },
+      "link_14": {
+        "id": "link_14",
+        "source": "joint_2",
+        "target": "joint_11",
+        "distance": 22.211733635876126
+      },
+      "link_15": {
+        "id": "link_15",
+        "source": "joint_11",
+        "target": "joint_1",
+        "distance": 36.55779290687858
+      },
+      "link_11": {
+        "id": "link_11",
+        "source": "joint_6",
+        "target": "joint_8",
+        "distance": 39.83647128504788
+      },
+      "link_12": {
+        "id": "link_12",
+        "source": "joint_8",
+        "target": "joint_11",
+        "distance": 85.92713321310227
+      },
+      "link_13": {
+        "id": "link_13",
+        "source": "joint_1",
+        "target": "joint_9",
+        "distance": 37.082865165584074
+      },
+      "link_16": {
+        "id": "link_16",
+        "source": "joint_9",
+        "target": "joint_10",
+        "distance": 22.586254423628727
+      },
+      "link_17": {
+        "id": "link_17",
+        "source": "joint_10",
+        "target": "joint_1",
+        "distance": 31.640339933558085
+      },
+      "link_18": {
+        "id": "link_18",
+        "source": "joint_10",
+        "target": "joint_12",
+        "distance": 22.666666666666675
+      },
+      "link_19": {
+        "id": "link_19",
+        "source": "joint_12",
+        "target": "joint_13",
+        "distance": 41.341733017483534
+      },
+      "link_20": {
+        "id": "link_20",
+        "source": "joint_13",
+        "target": "joint_10",
+        "distance": 24.235534058714507
+      },
+      "link_21": {
+        "id": "link_21",
+        "source": "joint_13",
+        "target": "joint_14",
+        "distance": 20.177682941529476
+      },
+      "link_22": {
+        "id": "link_22",
+        "source": "joint_14",
+        "target": "joint_12",
+        "distance": 45.7687423661365
+      },
+      "link_23": {
+        "id": "link_23",
+        "source": "joint_9",
+        "target": "joint_15",
+        "distance": 85.91743452615164
+      },
+      "link_24": {
+        "id": "link_24",
+        "source": "joint_15",
+        "target": "joint_16",
+        "distance": 41.33635741625578
+      },
+      "link_25": {
+        "id": "link_25",
+        "source": "joint_16",
+        "target": "joint_13",
+        "distance": 42.78369367462848
+      },
+      "link_26": {
+        "id": "link_26",
+        "source": "joint_14",
+        "target": "joint_16",
+        "distance": 26.77322460137282
+      }
+    },
+    "hyperedges": {}
+  },
+  "meta": {
+    "nodes": {
+      "joint_0": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": false
+      },
+      "joint_1": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": true
+      },
+      "joint_2": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": true
+      },
+      "joint_3": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": false
+      },
+      "joint_4": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": true
+      },
+      "joint_5": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": true
+      },
+      "joint_6": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": true
+      },
+      "joint_11": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": true
+      },
+      "joint_8": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": true
+      },
+      "joint_9": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": true
+      },
+      "joint_10": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": true
+      },
+      "joint_12": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": false
+      },
+      "joint_13": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": true
+      },
+      "joint_14": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": true
+      },
+      "joint_15": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": true
+      },
+      "joint_16": {
+        "color": "",
+        "zlevel": 0,
+        "showPath": true
+      }
+    },
+    "edges": {
+      "link_0": {
+        "color": "#1f77b4"
+      },
+      "link_1": {
+        "color": "#ff7f0e"
+      },
+      "link_2": {
+        "color": "#2ca02c"
+      },
+      "link_3": {
+        "color": "#d62728"
+      },
+      "link_4": {
+        "color": "#9467bd"
+      },
+      "link_5": {
+        "color": "#8c564b"
+      },
+      "link_6": {
+        "color": "#e377c2"
+      },
+      "link_7": {
+        "color": "#7f7f7f"
+      },
+      "link_8": {
+        "color": "#bcbd22"
+      },
+      "link_14": {
+        "color": "#d62728"
+      },
+      "link_15": {
+        "color": "#9467bd"
+      },
+      "link_11": {
+        "color": "#ff7f0e"
+      },
+      "link_12": {
+        "color": "#2ca02c"
+      },
+      "link_13": {
+        "color": "#d62728"
+      },
+      "link_16": {
+        "color": "#9467bd"
+      },
+      "link_17": {
+        "color": "#8c564b"
+      },
+      "link_18": {
+        "color": "#e377c2"
+      },
+      "link_19": {
+        "color": "#7f7f7f"
+      },
+      "link_20": {
+        "color": "#bcbd22"
+      },
+      "link_21": {
+        "color": "#17becf"
+      },
+      "link_22": {
+        "color": "#1f77b4"
+      },
+      "link_23": {
+        "color": "#ff7f0e"
+      },
+      "link_24": {
+        "color": "#2ca02c"
+      },
+      "link_25": {
+        "color": "#d62728"
+      },
+      "link_26": {
+        "color": "#9467bd"
+      }
+    }
+  },
+  "saved_at": "20260120_175824"
+}

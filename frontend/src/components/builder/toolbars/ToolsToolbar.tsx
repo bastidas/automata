@@ -19,6 +19,7 @@ export interface ToolsToolbarProps {
   linkCreationState: LinkCreationState
   setLinkCreationState: (state: LinkCreationState) => void
   setPreviewLine: (line: { start: [number, number]; end: [number, number] } | null) => void
+  onPauseAnimation?: () => void  // Called when a tool is clicked to pause animation
 }
 
 export const ToolsToolbar: React.FC<ToolsToolbarProps> = ({
@@ -28,7 +29,8 @@ export const ToolsToolbar: React.FC<ToolsToolbarProps> = ({
   setHoveredTool,
   linkCreationState,
   setLinkCreationState,
-  setPreviewLine
+  setPreviewLine,
+  onPauseAnimation
 }) => {
   return (
     <Box sx={{ p: `${TOOLS_PADDING}px`, width: TOOLS_BOX_WIDTH, boxSizing: 'border-box' }}>
@@ -61,6 +63,8 @@ export const ToolsToolbar: React.FC<ToolsToolbarProps> = ({
             >
               <IconButton
                 onClick={() => {
+                  // Pause animation when switching tools
+                  onPauseAnimation?.()
                   if (linkCreationState.isDrawing && tool.id !== 'draw_link') {
                     setLinkCreationState(initialLinkCreationState)
                     setPreviewLine(null)

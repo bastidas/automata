@@ -115,18 +115,18 @@ def load_force_graph():
 
 @app.post('/save-pylink-graph')
 def save_pylink_graph(pylink_data: dict):
-    """Save a pylink graph to the pygraphs directory"""
+    """Save a pylink graph to the graphs directory"""
     try:
         # Ensure USER_DIR exists first
         USER_DIR.mkdir(parents=True, exist_ok=True)
-        pygraphs_dir = USER_DIR / 'pygraphs'
-        pygraphs_dir.mkdir(parents=True, exist_ok=True)
+        graphs_dir = USER_DIR / 'graphs'
+        graphs_dir.mkdir(parents=True, exist_ok=True)
 
         # Use provided name or generate timestamp
         name = pylink_data.get('name', 'pylink')
         time_mark = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f'{name}_{time_mark}.json'
-        save_path = pygraphs_dir / filename
+        save_path = graphs_dir / filename
 
         # Add metadata
         save_data = {
@@ -153,31 +153,92 @@ def save_pylink_graph(pylink_data: dict):
         }
 
 
+@app.post('/save-pylink-graph-as')
+def save_pylink_graph_as(request: dict):
+    """Save a pylink graph to the graphs directory with a custom filename"""
+    try:
+        pylink_data = request.get('data', {})
+        custom_filename = request.get('filename', '')
+
+        # Ensure USER_DIR exists first
+        USER_DIR.mkdir(parents=True, exist_ok=True)
+        graphs_dir = USER_DIR / 'graphs'
+        graphs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use custom filename or generate from name
+        if custom_filename:
+            # Ensure .json extension
+            if not custom_filename.endswith('.json'):
+                custom_filename += '.json'
+            filename = custom_filename
+        else:
+            name = pylink_data.get('name', 'pylink')
+            time_mark = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f'{name}_{time_mark}.json'
+
+        save_path = graphs_dir / filename
+
+        # Add metadata
+        time_mark = datetime.now().strftime('%Y%m%d_%H%M%S')
+        save_data = {
+            **pylink_data,
+            'saved_at': time_mark,
+        }
+
+        with open(save_path, 'w') as f:
+            json.dump(save_data, f, indent=2)
+
+        print(f'Pylink graph saved as: {save_path}')
+
+        return {
+            'status': 'success',
+            'message': 'Pylink graph saved successfully',
+            'filename': filename,
+            'path': str(save_path),
+        }
+
+    except Exception as e:
+        return {
+            'status': 'error',
+            'message': f'Failed to save pylink graph: {str(e)}',
+        }
+
+
 @app.get('/list-pylink-graphs')
 def list_pylink_graphs():
     """List all saved pylink graphs"""
     try:
         # Ensure USER_DIR exists first
         USER_DIR.mkdir(parents=True, exist_ok=True)
-        pygraphs_dir = USER_DIR / 'pygraphs'
+        graphs_dir = USER_DIR / 'graphs'
 
-        if not pygraphs_dir.exists():
+        if not graphs_dir.exists():
             return {
                 'status': 'success',
                 'files': [],
             }
 
         files = []
-        for f in sorted(pygraphs_dir.glob('*.json'), key=lambda x: x.stat().st_mtime, reverse=True):
+        for f in sorted(graphs_dir.glob('*.json'), key=lambda x: x.stat().st_mtime, reverse=True):
             try:
                 with open(f) as fp:
                     data = json.load(fp)
+                    # Support both new hypergraph format and legacy format
+                    if 'linkage' in data:
+                        # New hypergraph format
+                        nodes_count = len(data.get('linkage', {}).get('nodes', {}))
+                        edges_count = len(data.get('linkage', {}).get('edges', {}))
+                    else:
+                        # Legacy format
+                        nodes_count = len(data.get('pylinkage', {}).get('joints', []))
+                        edges_count = len(data.get('meta', {}).get('links', {}))
                     files.append({
                         'filename': f.name,
                         'name': data.get('name', f.stem),
-                        'joints_count': len(data.get('pylinkage', {}).get('joints', [])),
-                        'links_count': len(data.get('meta', {}).get('links', {})),
+                        'nodes_count': nodes_count,
+                        'edges_count': edges_count,
                         'saved_at': data.get('saved_at', ''),
+                        'version': data.get('version', '1.0'),
                     })
             except:
                 files.append({
@@ -200,21 +261,21 @@ def list_pylink_graphs():
 
 @app.get('/load-pylink-graph')
 def load_pylink_graph(filename: str = None):
-    """Load a pylink graph from the pygraphs directory"""
+    """Load a pylink graph from the graphs directory"""
     try:
         # Ensure USER_DIR exists first
         USER_DIR.mkdir(parents=True, exist_ok=True)
-        pygraphs_dir = USER_DIR / 'pygraphs'
+        graphs_dir = USER_DIR / 'graphs'
 
-        if not pygraphs_dir.exists():
+        if not graphs_dir.exists():
             return {
                 'status': 'error',
-                'message': 'No pygraphs directory found',
+                'message': 'No graphs directory found',
             }
 
         if filename:
             # Load specific file
-            file_path = pygraphs_dir / filename
+            file_path = graphs_dir / filename
             if not file_path.exists():
                 return {
                     'status': 'error',
@@ -222,7 +283,7 @@ def load_pylink_graph(filename: str = None):
                 }
         else:
             # Load most recent file
-            files = list(pygraphs_dir.glob('*.json'))
+            files = list(graphs_dir.glob('*.json'))
             if not files:
                 return {
                     'status': 'error',
@@ -245,6 +306,61 @@ def load_pylink_graph(filename: str = None):
         return {
             'status': 'error',
             'message': f'Failed to load pylink graph: {str(e)}',
+        }
+
+
+@app.get('/load-demo')
+def load_demo(name: str):
+    """Load a demo linkage from the demo directory"""
+    from configs.paths import BASE_DIR
+
+    try:
+        demo_dir = BASE_DIR / 'demo'
+
+        if not demo_dir.exists():
+            return {
+                'status': 'error',
+                'message': 'Demo directory not found',
+            }
+
+        # Map demo names to files
+        # Note: '4bar' demo is generated programmatically in the frontend, not from a file
+        demo_files = {
+            'leg': 'leg.json',
+            'walker': 'walker0.json',
+            'complex': 'complex.json',
+            'intermediate': 'intermediate.json',
+        }
+
+        if name not in demo_files:
+            return {
+                'status': 'error',
+                'message': f'Unknown demo: {name}. Available: {list(demo_files.keys())}',
+            }
+
+        file_path = demo_dir / demo_files[name]
+        if not file_path.exists():
+            return {
+                'status': 'error',
+                'message': f'Demo file not found: {file_path}',
+            }
+
+        with open(file_path) as f:
+            demo_data = json.load(f)
+
+        print(f'Loaded demo: {name} from {file_path.name}')
+
+        return {
+            'status': 'success',
+            'name': name,
+            'filename': file_path.name,
+            'data': demo_data,
+        }
+
+    except Exception as e:
+        return {
+            'status': 'error',
+            'message': f'Failed to load demo: {str(e)}',
         }
 
 

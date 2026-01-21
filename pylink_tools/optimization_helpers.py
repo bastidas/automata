@@ -20,24 +20,26 @@ def extract_dimensions(
     pylink_data: dict,
     bounds_factor: float = 2.0,
     min_length: float = 0.1,
+    exclude_edges: set[str] | None = None,
 ) -> DimensionSpec:
     """
     Extract optimizable dimensions (link lengths) from pylink_data.
 
-    Identifies all link lengths that can be adjusted:
-      - Crank: distance (length from parent to crank point)
-      - Revolute: distance0, distance1 (lengths to each parent)
+    Supports both formats:
+      - Legacy (pylinkage.joints): extracts Crank.distance, Revolute.distance0/1
+      - Hypergraph (linkage.edges): extracts edge distances
 
-    Static joints are NOT included (they are fixed ground points).
+    Static joints / ground edges are NOT included (they are fixed).
 
     Args:
-        pylink_data: Full pylink document with 'pylinkage' section
+        pylink_data: Full pylink document (either format)
         bounds_factor: Multiplier for suggested bounds (e.g., 2.0 means
                        bounds are [value/2, value*2])
         min_length: Minimum allowed link length
+        exclude_edges: Edge IDs to exclude (for hypergraph format, defaults to {'ground'})
 
     Returns:
-        DimensionSpec with names, initial values, bounds, and joint mapping
+        DimensionSpec with names, initial values, bounds, and mapping
 
     Example:
         >>> spec = extract_dimensions(pylink_data)
@@ -46,6 +48,19 @@ def extract_dimensions(
         >>> print(spec.initial_values)
         [1.0, 3.0, 1.0]
     """
+    # Auto-detect format: hypergraph (linkage.nodes/edges) vs legacy (pylinkage.joints)
+    is_hypergraph = 'linkage' in pylink_data and 'edges' in pylink_data.get('linkage', {})
+
+    if is_hypergraph:
+        # Delegate to hypergraph extraction
+        return extract_dimensions_from_edges(
+            pylink_data,
+            bounds_factor=bounds_factor,
+            min_length=min_length,
+            exclude_edges=exclude_edges or {'ground'},
+        )
+
+    # Legacy format: pylinkage.joints
     pylinkage_data = pylink_data.get('pylinkage', {})
     joints_data = pylinkage_data.get('joints', [])
 
@@ -105,6 +120,58 @@ def _compute_bounds(
     lower = max(min_length, value / factor)
     upper = value * factor
     return (lower, upper)
+
+
+def extract_dimensions_from_edges(
+    pylink_data: dict,
+    bounds_factor: float = 2.0,
+    min_length: float = 0.1,
+    exclude_edges: set[str] | None = None,
+) -> DimensionSpec:
+    """
+    Extract optimizable dimensions from hypergraph linkage.edges format.
+
+    This handles the 'linkage.edges' format where each edge has a 'distance' property.
+
+    Args:
+        pylink_data: Mechanism data with 'linkage.edges' structure
+        bounds_factor: Multiplier for bounds (e.g., 2.0 = [val/2, val*2])
+        min_length: Minimum allowed link length
+        exclude_edges: Edge IDs to exclude (e.g., {'ground'})
+
+    Returns:
+        DimensionSpec with edge distances as optimizable parameters
+    """
+    if exclude_edges is None:
+        exclude_edges = {'ground'}  # Ground link is typically fixed
+
+    linkage = pylink_data.get('linkage', {})
+    edges = linkage.get('edges', {})
+
+    names: list[str] = []
+    initial_values: list[float] = []
+    bounds: list[tuple[float, float]] = []
+    edge_mapping: dict[str, tuple[str, str]] = {}
+
+    for edge_id, edge_data in edges.items():
+        if edge_id in exclude_edges:
+            continue
+
+        distance = edge_data.get('distance', 1.0)
+        dim_name = f'{edge_id}_distance'
+
+        names.append(dim_name)
+        initial_values.append(distance)
+        bounds.append(_compute_bounds(distance, bounds_factor, min_length))
+        edge_mapping[dim_name] = (edge_id, 'distance')
+
+    return DimensionSpec(
+        names=names,
+        initial_values=initial_values,
+        bounds=bounds,
+        joint_mapping={},  # Empty for hypergraph format
+        edge_mapping=edge_mapping,  # Used for linkage.edges format
+    )
 
 
 def extract_dimensions_with_custom_bounds(

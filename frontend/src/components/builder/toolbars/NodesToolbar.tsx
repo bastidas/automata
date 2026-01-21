@@ -37,7 +37,7 @@ export const NodesToolbar: React.FC<NodesToolbarProps> = ({
       {joints.length === 0 ? (
         <Box sx={{ p: 2, textAlign: 'center' }}>
           <Typography variant="caption" color="text.secondary">No joints yet</Typography>
-          <Typography variant="caption" display="block" color="text.disabled">Use Draw Link tool (L)</Typography>
+          <Typography variant="caption" display="block" color="text.disabled">Use Create Link tool (C)</Typography>
         </Box>
       ) : (
         joints.map((joint) => {

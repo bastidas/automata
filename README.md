@@ -48,7 +48,7 @@ conda activate automata
 
 ```bash
 # Create virtual environment
-python -m venv venv
+python -m venv automtata
 
 # Activate environment
 # On Windows:
@@ -75,9 +75,6 @@ Run the test suite to ensure everything is working:
 ```bash
 # Using pytest
 pytest tests/ -v
-
-# Or run a specific test
-pytest tests/test_pylink_trajectory.py -v
 ```
 
 All tests should pass without errors.
@@ -137,43 +134,13 @@ Once the backend is running, visit:
 ## Project Structure
 
 ```
-automata/
-├── backend/
-│   ├── query_api.py          # FastAPI endpoints
-│   └── run_server.py         # Backend server entry point
-├── configs/
-│   ├── appconfig.py          # Centralized config (ports, paths)
-│   ├── link_models.py        # Pydantic models for links/nodes
-│   └── matplotlib_config.py  # Matplotlib backend config
-├── frontend/
-│   ├── src/
-│   │   ├── components/       # React components
-│   │   │   ├── ForceGraphViewTab.tsx
-│   │   │   ├── PathVisualization.tsx
-│   │   │   ├── PylinkAnimateSimulate.tsx
-│   │   │   ├── PylinkBuilderTab.tsx
-│   │   │   ├── PylinkBuilderTools.tsx
-│   │   │   └── StatusAboutTab.tsx
-│   │   ├── App.tsx           # Main application
-│   │   └── main.tsx          # Entry point
-│   ├── package.json
-│   └── vite.config.ts
-├── link/                     # Pylinkage bridge utilities
-│   └── tools.py              # Link manipulation utilities
-├── pylink_tools/             # Demo linkages and examples
-├── viz_tools/                # Animation and visualization
-├── tests/
-│   ├── test_api_endpoints.py      # API endpoint tests
-│   ├── test_demo_linkages.py      # Pylinkage validation tests
-│   ├── test_file_operations.py    # Cross-platform file I/O tests
-│   ├── test_pylink_trajectory.py  # Trajectory computation tests
-│   └── 4bar_test.json            # Test data
-├── user/                     # User-saved graphs (generated)
-│   ├── pygraphs/            # Saved pylink graphs
-│   └── force_graphs/        # Saved force graphs
-├── pyproject.toml            # Python project configuration
-└── README.md
+TODO
 ```
+
+
+### Frontend structure
+TODO
+
 
 ## Testing
 
@@ -257,6 +224,132 @@ npm run format
 **5. Port conflicts**
 - If ports 8021 or 5173 are already in use, edit `configs/appconfig.py` to change ports
 - Restart both backend and frontend servers after changing ports
+
+### Why Doesn't My Mechanism Work?
+
+There are countless ways to create a poorly-formed mechanism that doesn't meet the requirements for trajectory calculation in this implementation. It's possible to create fully constrained systems—think of a rigid cube—that obviously can't be animated.
+
+**Understanding Node Types**
+
+First, note that there are three kinds of nodes:
+
+- **Static** — A fixed anchor point that doesn't move. It serves as a ground reference for the mechanism. Press `W` to convert a node to Static.
+- **Crank** — A node that rotates around a fixed point (its parent Static node) at a constant radius. The crank provides the input motion that drives the mechanism. Press `A` to convert a node to Crank.
+- **Revolute** — A pivot joint whose position is determined by constraints from two parent nodes. Most nodes in a mechanism are Revolute joints. Press `Q` to convert a node to Revolute.
+
+**The Crank Requirement**
+
+In this implementation, there must be at least one Crank node, and that crank must be able to make a full revolution. It's *very easy* to accidentally make even the simplest system over-constrained by making a single link too long or too short! You can see a minimal working example in the Demo section by clicking "Four Bar." If you're having problems with your mechanism, try shortening or lengthening a link.
+
+**Grashof's Law**
+
+If you're wondering why your four-bar linkage won't complete a full rotation, consider **Grashof's Law**: For four-bar linkages, this law predicts whether continuous rotation is possible based on link lengths. Let *s* = shortest link, *l* = longest link, and *p*, *q* = the other two links. If *s* + *l* ≤ *p* + *q*, the linkage permits continuous rotation (crank-rocker or double-crank). Otherwise, it's a non-Grashof linkage limited to oscillation (double-rocker). Note: The current implementation doesn't support double-rocker oscillation.
+
+**Under-Constrained Mechanisms**
+
+Just as we can over-constrain and lock a mechanism, we can also under-constrain them. If you make a triangle of links, it's locked in shape and will compute correctly. However, if you make a square of links, it would collapse into a parallelogram since it has an extra degree of freedom. You need to fully constrain shapes by adding additional links. For example, if you add a square of links to a working mechanism, trajectory simulation will fail—to fix this, add a diagonal cross-link to triangulate and rigidify the square.
+
+**Summary: Making Your Mechanisms Work**
+
+- Mark appropriate nodes as Static, Crank, or Revolute
+- Shorten or lengthen links as necessary to satisfy Grashof's Law
+- Fully constrain open shapes by triangulating them (add diagonal links)
+- Avoid dangling or hanging links that aren't part of a closed chain
+
+## Similar Projects
+
+If you're interested in linkage mechanism design and simulation, here are some other notable tools in this space:
+
+### Pylinkage
+- **Source**: [https://github.com/HugoFara/pylinkage](- **Source**: https://github.com/HugoFara/pylinkage)
+- Pylinkage is a Python library for building and optimizing planar linkages using Particle Swarm Optimization.
+- **This work uses pylinkage.**
+
+### PMKS+ (Planar Mechanism Kinematic Simulator Plus)
+- **Website**: [app.pmksplus.com](https://app.pmksplus.com/)
+- **Source**: [github.com/PMKS-Web/PMKSWeb](https://github.com/PMKS-Web/PMKSWeb)
+- Web-based tool with advanced analysis and automatic synthesis capabilities for mechanical design optimization. Features comprehensive kinematic and force analysis, automatic linkage synthesis for desired motion, and tools to modify designs for optimal performance.
+
+### MotionGen
+- **Website**:  [https://motiongen.io](https://motiongen.io)
+- App for synthesizing and simulating planar four-bar linkages. Design and animate mechanisms for walking robots, drawing bots, and grabbers. Includes 2D/3D visualization, custom shape design, SnappyXO hardware kit prototyping support, and export for 3D printing/laser-cutting.
+
+### GeoGebra Four-Bar Coupler Curve Creator
+- **Website**: [geogebra.org/m/k3VXAnXK](https://www.geogebra.org/m/k3VXAnXK)
+- Interactive four-bar coupler curve creator built on the GeoGebra platform. Great for quick exploration of coupler curves.
+
+### Linkage Mechanism Designer and Simulator
+- **Website**: [blog.rectorsquid.com/linkage-mechanism-designer-and-simulator](https://blog.rectorsquid.com/linkage-mechanism-designer-and-simulator/)
+- Computer-aided design program for Microsoft Windows used for prototyping mechanical linkages.
+
+### Pyslvs-UI
+- **Source**: [github.com/KmolYuan/Pyslvs-UI](https://github.com/KmolYuan/Pyslvs-UI)
+- A GUI-based (PyQt5) tool for designing 2D linkage mechanisms. Python-based with optimization capabilities.
+
+### LInK
+- **Demo**: [ahn1376-linkalphabetdemo.hf.space](https://ahn1376-linkalphabetdemo.hf.space/)
+- **Source**: [github.com/ahnobari/LInK](https://github.com/ahnobari/LInK)
+- LInK is a novel framework that integrates contrastive learning of performance and design space with optimization techniques for solving complex inverse problems in engineering design with discrete and continuous variables. Focuses on the path synthesis problem for planar linkage mechanisms.
+
+### SAM
+- **Website**: [artas.nl](https://www.artas.nl/en/)
+- Commercial software for design, motion/force analysis, and constrained optimization of linkage mechanisms and drive systems.
+
+### Four-bar-rs
+- **Demo**: [kmolyuan.github.io/four-bar-rs](https://kmolyuan.github.io/four-bar-rs/)
+- **Source**: [github.com/KmolYuan/four-bar-rs](https://github.com/KmolYuan/four-bar-rs)
+- Atlas-based path synthesis of planar four-bar linkages using Elliptical Fourier Descriptors.
+
+### Wolfram Demonstrations
+- **Demos**: [Four-Bar Linkage](https://demonstrations.wolfram.com/FourBarLinkage/) | [Configuration Space](https://demonstrations.wolfram.com/ConfigurationSpaceForFourBarLinkage/)
+- Interactive visualizations of four-bar linkage motion and configuration space exploration.
+
+### SpatialGraphEmbeddings
+- **Website**: [jan.legersky.cz/project/real_embeddings_of_rigid_graphs](https://jan.legersky.cz/project/real_embeddings_of_rigid_graphs/)
+- **Source**: [github.com/Legersky/SpatialGraphEmbeddings](https://github.com/Legersky/SpatialGraphEmbeddings)
+- Implements methods for obtaining edge lengths of minimally rigid graphs with many real spatial embeddings. Based on sampling over a two-parameter family that preserves the coupler curve. Useful for studying embeddings of graphs in Euclidean space where distances between adjacent vertices must satisfy given edge lengths.
+
+
+## Why This Project?
+
+### Background
+
+A **mechanism** transforms input forces and movement into a desired set of output forces and movement. A **mechanical linkage** is an assembly of rigid bodies (links) connected by joints to manage forces and motion. When modeled as a network of rigid links and ideal joints, this is called a **kinematic chain**.
+
+**Degrees of Freedom (DOF)**: Also called mobility, DOF is the number of independent inputs needed to fully define a mechanism's configuration. The Grübler–Kutzbach criterion calculates this from the number of links, joints, and each joint's freedom.
+
+**Planar Linkages**: A planar mechanism constrains all links to move within parallel planes. The simplest closed-chain planar linkage is the **four-bar linkage**—four rigid bodies connected in a loop by four one-degree-of-freedom joints (revolute/pin joints or prismatic/sliding joints).
+
+**Grashof's Law**: For four-bar linkages, this law predicts whether continuous rotation is possible based on link lengths. Let *s* = shortest link, *l* = longest link, and *p*, *q* = the other two links. If *s* + *l* ≤ *p* + *q*, the linkage permits continuous rotation (crank-rocker or double-crank). Otherwise, it's a non-Grashof linkage limited to oscillation (double-rocker).
+
+Key terminology for four-bar linkages:
+- **Ground link**: Fixed in place relative to the viewer
+- **Crank**: Connected to ground by a revolute joint; can complete full revolutions
+- **Rocker**: Connected to ground by a revolute joint; limited rotation range
+- **Slider**: Connected to ground by a prismatic joint
+- **Coupler** (floating link): Connects two other links; traces the output path
+
+More complex mechanisms are built by combining multiple linkages.
+
+### The Problem
+
+**Given a planar path (or set of paths), how do we construct a multi-link mechanism that closely traces those paths while satisfying design constraints?**
+
+This is an inverse problem in mechanism synthesis. While several tools above address related problems, only SAM, LInK, and Four-bar-rs solve subsets of the path synthesis problem. Acinonyx aims to provide a flexible, open-source solution with support for multi-link mechanisms beyond simple four-bars.
+
+### Technical Challenges
+
+Path synthesis optimization is difficult because:
+
+- **Non-convex search space**: The objective landscape has many local minima—gradient descent can get stuck far from the optimal solution
+- **Mixed variables**: The problem involves both discrete choices (mechanism topology) and continuous parameters (link lengths, joint positions)
+- **Phase invariance**: A mechanism may trace the correct path shape but at a different phase (starting point along the curve), leading to a key challenge:
+  - Optimizer finds dimensions that produce the correct path shape
+  - But the phase differs from the target → computed error remains high
+  - Optimizer overcorrects by distorting the path to minimize phase error
+  - Result: wrong dimensions, wrong path
+
+Acinonyx addresses these challenges through phase-invariant distance metrics and global optimization strategies.
 
 ## License
 

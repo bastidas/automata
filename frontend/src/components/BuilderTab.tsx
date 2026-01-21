@@ -47,7 +47,9 @@ import {
   findElementsInBox,
   isPointInPolygon,
   areLinkEndpointsInPolygon,
+  transformPolygonPoints,
   MERGE_THRESHOLD,
+  JOINT_SNAP_THRESHOLD,
   DraggableToolbar,
   ToolbarToggleButtons,
   TOOLBAR_CONFIGS,
@@ -94,10 +96,10 @@ import {
   MoreToolbar,
   SettingsToolbar,
   OptimizationToolbar,
+  AnimateToolbar,
   // Toolbar types
   type CanvasBgColor,
   type TrajectoryStyle,
-  type SelectionHighlightColor,
   type OptMethod,
   type SmoothMethod,
   type ResampleMethod,
@@ -176,6 +178,7 @@ const BuilderTab: React.FC = () => {
   const [selectedLinks, setSelectedLinks] = useState<string[]>([])
   const [hoveredJoint, setHoveredJoint] = useState<string | null>(null)
   const [hoveredLink, setHoveredLink] = useState<string | null>(null)
+  const [hoveredPolygonId, setHoveredPolygonId] = useState<string | null>(null)
 
   // Status message system
   const [statusMessage, setStatusMessage] = useState<StatusMessage | null>(null)
@@ -277,8 +280,9 @@ const BuilderTab: React.FC = () => {
   const [jointSize, setJointSize] = useState(8)  // 3-16px
   const [linkThickness, setLinkThickness] = useState(8)  // 1-16px
   const [trajectoryDotSize, setTrajectoryDotSize] = useState(4)  // 2-6px
-  const [selectionHighlightColor, setSelectionHighlightColor] = useState<'blue' | 'orange' | 'green' | 'purple'>('blue')
-  const [showMeasurementUnits, setShowMeasurementUnits] = useState(true)
+  const [trajectoryDotOutline, setTrajectoryDotOutline] = useState(true)  // show white outline
+  const [trajectoryDotOpacity, setTrajectoryDotOpacity] = useState(0.85)  // slightly transparent
+  const [selectionHighlightColor] = useState<'blue' | 'orange' | 'green' | 'purple'>('blue')  // Fixed - no longer user-configurable
   const [trajectoryStyle, setTrajectoryStyle] = useState<'dots' | 'line' | 'both'>('both')
 
   // Derived selection color
@@ -489,7 +493,7 @@ const BuilderTab: React.FC = () => {
     pause: pauseAnimation,
     stop: stopAnimation,
     reset: _resetAnimation,
-    setFrame: _setAnimationFrame,
+    setFrame: setAnimationFrame,
     setPlaybackSpeed,
     getAnimatedPositions
   } = useAnimation({
@@ -500,11 +504,12 @@ const BuilderTab: React.FC = () => {
 
   // Update animated positions when animation frame changes
   useEffect(() => {
-    if (animationState.isAnimating) {
+    if (animationState.isAnimating || animationState.currentFrame > 0) {
+      // Update positions when animating OR when stepping through frames while paused
       const positions = getAnimatedPositions()
       setAnimatedPositions(positions)
     } else if (!animationState.isAnimating && animationState.currentFrame === 0) {
-      // Reset to original positions when stopped
+      // Reset to original positions when stopped at frame 0
       setAnimatedPositions(null)
     }
   }, [animationState.isAnimating, animationState.currentFrame, getAnimatedPositions])
@@ -945,6 +950,12 @@ const BuilderTab: React.FC = () => {
   const handleCanvasMouseDown = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
     if (!canvasRef.current) return
 
+    // Auto-pause animation on any canvas interaction
+    if (animationState.isAnimating) {
+      pauseAnimation()
+      showStatus('Animation paused for editing', 'info', 1500)
+    }
+
     const rect = canvasRef.current.getBoundingClientRect()
     const pixelX = event.clientX - rect.left
     const pixelY = event.clientY - rect.top
@@ -1051,7 +1062,7 @@ const BuilderTab: React.FC = () => {
       showStatus(`Dragging ${nearestJoint.name}`, 'action')
     }
     }
-  }, [toolMode, selectedJoints, getJointsWithPositions, getJointPosition, showStatus])
+  }, [toolMode, selectedJoints, getJointsWithPositions, getJointPosition, showStatus, animationState.isAnimating, pauseAnimation])
 
   // Handle mouse move on canvas
   const handleCanvasMouseMove = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
@@ -1490,7 +1501,9 @@ const BuilderTab: React.FC = () => {
     const jointsWithPositions = getJointsWithPositions()
     const linksWithPositions = getLinksWithPositions()
     const nearestJoint = findNearestJoint(clickPoint, jointsWithPositions)
-    const nearestLink = findNearestLink(clickPoint, linksWithPositions)
+    // Use larger threshold (8 units) in merge mode for easier link clicking
+    const linkThreshold = toolMode === 'merge' ? 8.0 : JOINT_SNAP_THRESHOLD
+    const nearestLink = findNearestLink(clickPoint, linksWithPositions, linkThreshold)
 
     // Handle mechanism select mode - select and enter move mode
     if (toolMode === 'mechanism_select') {
@@ -1645,6 +1658,9 @@ const BuilderTab: React.FC = () => {
               return {
                 ...obj,
                 mergedLinkName: linkName,
+                // Store original link positions for rigid transformation
+                mergedLinkOriginalStart: startPos,
+                mergedLinkOriginalEnd: endPos,
                 fillColor: linkColor,
                 fillOpacity: 0.25,  // Subtle shaded color
                 strokeColor: linkColor
@@ -1663,7 +1679,8 @@ const BuilderTab: React.FC = () => {
       // Initial state: waiting for user to select either a polygon or a link
       // PRIORITY: If clicking near a link, select the link (even if inside a polygon)
       // This allows selecting links that are inside polygons
-      if (mergePolygonState.step === 'awaiting_selection') {
+      // 'idle' and 'awaiting_selection' are treated the same - waiting for first selection
+      if (mergePolygonState.step === 'idle' || mergePolygonState.step === 'awaiting_selection') {
         // Check for link FIRST - prioritize link selection over polygon
         if (nearestLink) {
           // User clicked on a link first
@@ -2153,7 +2170,7 @@ const BuilderTab: React.FC = () => {
                       `${i === 0 ? 'M' : 'L'} ${unitsToPixels(pos[0])} ${unitsToPixels(pos[1])}`
                     ).join(' ')}
                   fill="none"
-                  stroke="rgba(33, 150, 243, 0.3)"
+                  stroke="rgba(120, 120, 120, 0.5)"
                   strokeWidth={2}
                   strokeDasharray="4,2"
                 />
@@ -2169,9 +2186,9 @@ const BuilderTab: React.FC = () => {
                     cy={unitsToPixels(pos[1])}
                     r={trajectoryDotSize}
                     fill={getTrajectoryColor(stepIndex, validPositions.length)}
-                    stroke="#fff"
-                    strokeWidth={1}
-                    opacity={0.8}
+                    stroke={trajectoryDotOutline ? '#fff' : 'none'}
+                    strokeWidth={trajectoryDotOutline ? 1 : 0}
+                    opacity={trajectoryDotOpacity}
                   >
                     <title>{`${jointName} step ${stepIndex + 1}/${validPositions.length}: (${pos[0]?.toFixed(1) ?? '?'}, ${pos[1]?.toFixed(1) ?? '?'})`}</title>
                   </circle>
@@ -2250,8 +2267,94 @@ const BuilderTab: React.FC = () => {
       const midX = (pos0[0] + pos1[0]) / 2
       const midY = (pos0[1] + pos1[1]) / 2
 
+      // Common click handler for link in merge mode
+      const handleLinkClickForMerge = (e: React.MouseEvent) => {
+        if (toolMode !== 'merge') return false
+
+        e.stopPropagation()
+
+        // 'idle' and 'awaiting_selection' are treated the same - waiting for first selection
+        if (mergePolygonState.step === 'idle' || mergePolygonState.step === 'awaiting_selection') {
+          // Select this link first
+          setMergePolygonState({
+            step: 'link_selected',
+            selectedPolygonId: null,
+            selectedLinkName: linkName
+          })
+          setSelectedLinks([linkName])
+          setDrawnObjects(prev => ({ ...prev, selectedIds: [] }))
+          showStatus(`Selected link "${linkName}" — click a polygon to merge with`, 'action')
+        } else if (mergePolygonState.step === 'polygon_selected') {
+          // Complete the merge with the selected polygon
+          const polygonId = mergePolygonState.selectedPolygonId!
+          const polygon = drawnObjects.objects.find(obj => obj.id === polygonId)
+          if (polygon && polygon.points) {
+            if (areLinkEndpointsInPolygon(pos0, pos1, polygon.points)) {
+              const linkColor = linkMeta.color || getDefaultColor(index)
+              setDrawnObjects(prev => ({
+                ...prev,
+                objects: prev.objects.map(o => {
+                  if (o.id === polygonId) {
+                    return {
+                      ...o,
+                      mergedLinkName: linkName,
+                      // Store original link positions for rigid transformation
+                      mergedLinkOriginalStart: pos0,
+                      mergedLinkOriginalEnd: pos1,
+                      fillColor: linkColor,
+                      fillOpacity: 0.25,
+                      strokeColor: linkColor
+                    }
+                  }
+                  return o
+                }),
+                selectedIds: []
+              }))
+              showStatus(`✓ Merged polygon "${polygon.name}" with link "${linkName}"`, 'success', 3000)
+              setMergePolygonState(initialMergePolygonState)
+              setSelectedLinks([])
+            } else {
+              showStatus(`✗ Failed: Link "${linkName}" endpoints are not inside polygon "${polygon.name}"`, 'error', 3500)
+            }
+          }
+        } else if (mergePolygonState.step === 'link_selected' && linkName !== mergePolygonState.selectedLinkName) {
+          // Switch to different link
+          setMergePolygonState({
+            step: 'link_selected',
+            selectedPolygonId: null,
+            selectedLinkName: linkName
+          })
+          setSelectedLinks([linkName])
+          showStatus(`Switched to link "${linkName}" — click a polygon to merge with`, 'action')
+        }
+        return true
+      }
+
       links.push(
         <g key={linkName}>
+          {/* Invisible wider hit area for easier clicking */}
+          <line
+            x1={unitsToPixels(pos0[0])}
+            y1={unitsToPixels(pos0[1])}
+            x2={unitsToPixels(pos1[0])}
+            y2={unitsToPixels(pos1[1])}
+            stroke="transparent"
+            strokeWidth={Math.max(effectiveStrokeWidth * 3, 12)}  // At least 12px wide hit area
+            strokeLinecap="round"
+            style={{ cursor: moveGroupState.isActive ? 'move' : 'pointer' }}
+            onMouseEnter={() => !moveGroupState.isDragging && setHoveredLink(linkName)}
+            onMouseLeave={() => setHoveredLink(null)}
+            onClick={(e) => {
+              if (handleLinkClickForMerge(e)) return
+            }}
+            onDoubleClick={(e) => {
+              if (toolMode === 'select') {
+                e.stopPropagation()
+                openLinkEditModal(linkName)
+              }
+            }}
+          />
+          {/* Visible link line */}
           <line
             x1={unitsToPixels(pos0[0])}
             y1={unitsToPixels(pos0[1])}
@@ -2262,15 +2365,7 @@ const BuilderTab: React.FC = () => {
             strokeLinecap="round"
             strokeDasharray={isGroundLink ? '8,4' : undefined}  // Dashed for ground links
             filter={linkHighlightStyle.filter}
-            style={{ cursor: moveGroupState.isActive ? 'move' : 'pointer' }}
-            onMouseEnter={() => !moveGroupState.isDragging && setHoveredLink(linkName)}
-            onMouseLeave={() => setHoveredLink(null)}
-            onDoubleClick={(e) => {
-              if (toolMode === 'select') {
-                e.stopPropagation()
-                openLinkEditModal(linkName)
-              }
-            }}
+            style={{ cursor: moveGroupState.isActive ? 'move' : 'pointer', pointerEvents: 'none' }}
           />
           {/* Link label - show on hover/selected, or when showLinkLabels is enabled */}
           {(showLinkLabels || isHovered || isSelected) && (
@@ -2450,38 +2545,196 @@ const BuilderTab: React.FC = () => {
 
     return drawnObjects.objects.map(obj => {
       if (obj.type === 'polygon' && obj.points.length >= 3) {
-        const pathData = obj.points.map((p, i) =>
+        // Get points - transform if merged with a link and during animation
+        let displayPoints = obj.points
+
+        if (obj.mergedLinkName && obj.mergedLinkOriginalStart && obj.mergedLinkOriginalEnd) {
+          // Get current link positions
+          const linkMeta = pylinkDoc.meta.links[obj.mergedLinkName]
+          if (linkMeta) {
+            const currentStart = getJointPosition(linkMeta.connects[0])
+            const currentEnd = getJointPosition(linkMeta.connects[1])
+
+            if (currentStart && currentEnd) {
+              // Transform polygon points based on link movement
+              displayPoints = transformPolygonPoints(
+                obj.points,
+                obj.mergedLinkOriginalStart,
+                obj.mergedLinkOriginalEnd,
+                currentStart,
+                currentEnd
+              )
+            }
+          }
+        }
+
+        const pathData = displayPoints.map((p, i) =>
           `${i === 0 ? 'M' : 'L'} ${unitsToPixels(p[0])} ${unitsToPixels(p[1])}`
         ).join(' ') + ' Z'
 
         const isSelected = drawnObjects.selectedIds.includes(obj.id)
         const isInMoveGroup = moveGroupState.isActive && moveGroupState.drawnObjectIds.includes(obj.id)
+        const isHovered = hoveredPolygonId === obj.id
+        const isMergeMode = toolMode === 'merge'
+        const isMerged = !!obj.mergedLinkName
+
+        // In merge mode: highlight hovered polygons, show differently if merged vs unmerged
+        const isUnmergeCandidate = isMergeMode && isMerged  // Can be unmerged
+        const isMergeHighlighted = isMergeMode && isHovered
 
         // Determine highlight type for glow effect
         const polygonHighlightType: HighlightType = isInMoveGroup
           ? 'move_group'
-          : isSelected
+          : (isSelected || isMergeHighlighted)
             ? 'selected'
             : 'none'
 
         // Get highlight styling - keeps original fill, adds glow outline in object's color
         const polygonHighlightStyle = getHighlightStyle('polygon', polygonHighlightType, obj.strokeColor, obj.strokeWidth)
 
+        // Custom merge mode styling
+        const mergeStrokeWidth = isMergeHighlighted
+          ? Math.max(polygonHighlightStyle.strokeWidth, 4)
+          : polygonHighlightStyle.strokeWidth
+        const mergeStrokeColor = isMergeHighlighted
+          ? (isUnmergeCandidate ? '#f44336' : '#4caf50')  // Red for unmerge, green for merge
+          : obj.strokeColor
+        const mergeFillOpacity = isMergeHighlighted
+          ? Math.min(obj.fillOpacity + 0.15, 0.6)
+          : obj.fillOpacity
+
         return (
           <g key={obj.id}>
             <path
               d={pathData}
-              fill={obj.fillColor}  // Keep original fill color
-              stroke={obj.strokeColor}  // Keep original stroke color
-              strokeWidth={polygonHighlightStyle.strokeWidth}
-              fillOpacity={obj.fillOpacity}
+              fill={obj.fillColor}
+              stroke={isMergeMode ? mergeStrokeColor : obj.strokeColor}
+              strokeWidth={isMergeMode ? mergeStrokeWidth : polygonHighlightStyle.strokeWidth}
+              fillOpacity={isMergeMode ? mergeFillOpacity : obj.fillOpacity}
               filter={polygonHighlightStyle.filter}
-              style={{ cursor: moveGroupState.isActive ? 'move' : 'pointer' }}
+              style={{
+                cursor: moveGroupState.isActive ? 'move' : 'pointer',
+                pointerEvents: 'all'  // Ensure clicks register on fill area
+              }}
+              onMouseEnter={() => {
+                if (isMergeMode) {
+                  setHoveredPolygonId(obj.id)
+                }
+              }}
+              onMouseLeave={() => {
+                if (isMergeMode) {
+                  setHoveredPolygonId(null)
+                }
+              }}
               onClick={(e) => {
-                // In merge mode, let the canvas handler process this click
-                // (don't stopPropagation, don't handle selection here)
+                // In merge mode, handle click directly for better detection
                 if (toolMode === 'merge') {
-                  // Don't stop propagation - let the canvas click handler handle merge logic
+                  e.stopPropagation()
+
+                  // Handle unmerge for already-merged polygons
+                  if (obj.mergedLinkName) {
+                    const linkName = obj.mergedLinkName
+
+                    // When unmerging, convert the current transformed positions to permanent positions
+                    let finalPoints = obj.points
+                    if (obj.mergedLinkOriginalStart && obj.mergedLinkOriginalEnd) {
+                      // Get current link positions to compute final polygon position
+                      const linkMeta = pylinkDoc.meta.links[linkName]
+                      if (linkMeta) {
+                        const currentStart = getJointPosition(linkMeta.connects[0])
+                        const currentEnd = getJointPosition(linkMeta.connects[1])
+                        if (currentStart && currentEnd) {
+                          finalPoints = transformPolygonPoints(
+                            obj.points,
+                            obj.mergedLinkOriginalStart,
+                            obj.mergedLinkOriginalEnd,
+                            currentStart,
+                            currentEnd
+                          )
+                        }
+                      }
+                    }
+
+                    setDrawnObjects(prev => ({
+                      ...prev,
+                      objects: prev.objects.map(o => {
+                        if (o.id === obj.id) {
+                          return {
+                            ...o,
+                            points: finalPoints,  // Keep current transformed position
+                            mergedLinkName: undefined,
+                            mergedLinkOriginalStart: undefined,
+                            mergedLinkOriginalEnd: undefined,
+                            fillColor: 'rgba(156, 39, 176, 0.15)',  // Reset to default polygon color
+                            fillOpacity: 0.15,
+                            strokeColor: '#9c27b0'
+                          }
+                        }
+                        return o
+                      })
+                    }))
+                    showStatus(`✓ Unmerged polygon "${obj.name}" from link "${linkName}"`, 'success', 3000)
+                    setMergePolygonState(initialMergePolygonState)
+                    setSelectedLinks([])
+                    return
+                  }
+
+                  // Handle merge selection for unmerged polygons
+                  // 'idle' and 'awaiting_selection' are treated the same - waiting for first selection
+                  if (mergePolygonState.step === 'idle' || mergePolygonState.step === 'awaiting_selection') {
+                    setMergePolygonState({
+                      step: 'polygon_selected',
+                      selectedPolygonId: obj.id,
+                      selectedLinkName: null
+                    })
+                    setDrawnObjects(prev => ({ ...prev, selectedIds: [obj.id] }))
+                    setSelectedLinks([])
+                    showStatus(`Selected polygon "${obj.name}" — click a link to merge with`, 'action')
+                  } else if (mergePolygonState.step === 'link_selected') {
+                    // Complete the merge with the selected link
+                    const linkName = mergePolygonState.selectedLinkName!
+                    const linkMeta = pylinkDoc.meta.links[linkName]
+                    if (linkMeta) {
+                      const startPos = getJointPosition(linkMeta.connects[0])
+                      const endPos = getJointPosition(linkMeta.connects[1])
+                      if (startPos && endPos && areLinkEndpointsInPolygon(startPos, endPos, obj.points)) {
+                        const linkColor = linkMeta.color || getDefaultColor(0)
+                        setDrawnObjects(prev => ({
+                          ...prev,
+                          objects: prev.objects.map(o => {
+                            if (o.id === obj.id) {
+                              return {
+                                ...o,
+                                mergedLinkName: linkName,
+                                // Store original link positions for rigid transformation
+                                mergedLinkOriginalStart: startPos,
+                                mergedLinkOriginalEnd: endPos,
+                                fillColor: linkColor,
+                                fillOpacity: 0.25,
+                                strokeColor: linkColor
+                              }
+                            }
+                            return o
+                          }),
+                          selectedIds: []
+                        }))
+                        showStatus(`✓ Merged polygon "${obj.name}" with link "${linkName}"`, 'success', 3000)
+                        setMergePolygonState(initialMergePolygonState)
+                        setSelectedLinks([])
+                      } else {
+                        showStatus(`✗ Failed: Link "${linkName}" endpoints are not inside polygon "${obj.name}"`, 'error', 3500)
+                      }
+                    }
+                  } else if (mergePolygonState.step === 'polygon_selected' && obj.id !== mergePolygonState.selectedPolygonId) {
+                    // Switch to a different polygon
+                    setMergePolygonState({
+                      step: 'polygon_selected',
+                      selectedPolygonId: obj.id,
+                      selectedLinkName: null
+                    })
+                    setDrawnObjects(prev => ({ ...prev, selectedIds: [obj.id] }))
+                    showStatus(`Switched to polygon "${obj.name}" — click a link to merge with`, 'action')
+                  }
                   return
                 }
 
@@ -2495,16 +2748,17 @@ const BuilderTab: React.FC = () => {
                 }))
               }}
             />
-            {/* Show object name on hover/selection */}
-            {isSelected && (
+            {/* Show object name on hover/selection or in merge mode when hovered */}
+            {(isSelected || (isMergeMode && isHovered)) && (
               <text
                 x={unitsToPixels(obj.points[0][0])}
                 y={unitsToPixels(obj.points[0][1]) - 8}
                 fontSize="10"
-                fill={obj.strokeColor}
+                fill={isMergeMode && isHovered ? (isUnmergeCandidate ? '#f44336' : '#4caf50') : obj.strokeColor}
                 fontWeight="500"
+                style={{ pointerEvents: 'none' }}
               >
-                {obj.name}
+                {obj.name}{isUnmergeCandidate ? ' (click to unmerge)' : ''}
               </text>
             )}
           </g>
@@ -2833,20 +3087,25 @@ const BuilderTab: React.FC = () => {
   }, [])
 
   // Get toolbar position (use saved or default)
-  // Negative x values mean "offset from right edge of canvas"
+  // Negative x/y values mean "offset from right/bottom edge of canvas"
   const getToolbarPosition = (id: string): ToolbarPosition => {
     if (toolbarPositions[id]) return toolbarPositions[id]
     const config = TOOLBAR_CONFIGS.find(c => c.id === id)
     const defaultPos = config?.defaultPosition || { x: 100, y: 100 }
 
+    let x = defaultPos.x
+    let y = defaultPos.y
+
     // Convert negative x to position from right edge
     if (defaultPos.x < 0) {
-      return {
-        x: canvasDimensions.width + defaultPos.x,
-        y: defaultPos.y
-      }
+      x = canvasDimensions.width + defaultPos.x
     }
-    return defaultPos
+    // Convert negative y to position from bottom edge
+    if (defaultPos.y < 0) {
+      y = canvasDimensions.height + defaultPos.y
+    }
+
+    return { x, y }
   }
 
   // Get toolbar dimensions based on type
@@ -2856,9 +3115,9 @@ const BuilderTab: React.FC = () => {
         // Tools should NEVER scroll - large maxHeight to fit all content
         return { minWidth: 220, maxHeight: 600 }
       case 'more':
-        return { minWidth: 180, maxHeight: 350 }  // Simplified, shorter now (optimization moved out)
+        return { minWidth: 180, maxHeight: 500 }  // Tall enough to fit all tools without scrolling
       case 'optimize':
-        return { minWidth: 320, maxHeight: 700 }  // Wide for hyperparameters, tall for all controls
+        return { minWidth: 960, maxHeight: 650 }  // 3x wider (320*3), shorter height for horizontal layout
       case 'links':
         return { minWidth: 200, maxHeight: 480 }  // 1.5x taller for links list
       case 'nodes':
@@ -2883,6 +3142,7 @@ const BuilderTab: React.FC = () => {
       linkCreationState={linkCreationState}
       setLinkCreationState={setLinkCreationState}
       setPreviewLine={setPreviewLine}
+      onPauseAnimation={animationState.isAnimating ? pauseAnimation : undefined}
     />
   )
 
@@ -2972,9 +3232,49 @@ const BuilderTab: React.FC = () => {
     // Update state
     setLinkageDoc(result.doc)
 
+    // Update modal data if it's open for this joint
+    setEditingJointData(prev => {
+      if (prev && prev.name === jointName) {
+        return { ...prev, type: value as 'Static' | 'Crank' | 'Revolute' }
+      }
+      return prev
+    })
+
     // Trigger auto-simulation after state update
     triggerMechanismChange()
   }, [linkageDoc, getJointPosition, showStatus, triggerMechanismChange])
+
+  // Keyboard shortcuts for changing node type (Q=Revolute, W=Static, A=Crank)
+  useEffect(() => {
+    const handleNodeTypeShortcut = (event: KeyboardEvent) => {
+      // Skip if typing in input field
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return
+      }
+
+      // Only handle if exactly one joint is selected
+      if (selectedJoints.length !== 1) return
+
+      const jointName = selectedJoints[0]
+      let newType: string | null = null
+
+      if (event.key === 'q' || event.key === 'Q') {
+        newType = 'Revolute'
+      } else if (event.key === 'w' || event.key === 'W') {
+        newType = 'Static'
+      } else if (event.key === 'a' || event.key === 'A') {
+        newType = 'Crank'
+      }
+
+      if (newType) {
+        updateJointProperty(jointName, 'type', newType)
+        event.preventDefault()
+      }
+    }
+
+    document.addEventListener('keydown', handleNodeTypeShortcut)
+    return () => document.removeEventListener('keydown', handleNodeTypeShortcut)
+  }, [selectedJoints, updateJointProperty])
 
   // Rename a joint (node) - using hypergraph operations
   const renameJoint = useCallback((oldName: string, newName: string) => {
@@ -2988,12 +3288,33 @@ const BuilderTab: React.FC = () => {
 
     setLinkageDoc(result.doc)
 
+    // Update animated positions to use new name (prevents visual jump during animation)
+    setAnimatedPositions(prev => {
+      if (!prev || !prev[oldName]) return prev
+      const updated = { ...prev }
+      updated[newName] = updated[oldName]
+      delete updated[oldName]
+      return updated
+    })
+
+    // Update selection state if the renamed joint was selected
+    setSelectedJoints(prev =>
+      prev.includes(oldName)
+        ? prev.map(name => name === oldName ? newName : name)
+        : prev
+    )
+
+    // Update hovered state if the renamed joint was hovered
+    if (hoveredJoint === oldName) {
+      setHoveredJoint(newName)
+    }
+
     // Update the modal data with new name if modal is open
     if (editingJointData && editingJointData.name === oldName) {
       setEditingJointData(prev => prev ? { ...prev, name: newName } : null)
     }
     showStatus(`Renamed to ${newName}`, 'success', 1500)
-  }, [linkageDoc, showStatus, editingJointData])
+  }, [linkageDoc, showStatus, editingJointData, hoveredJoint])
 
   // Nodes toolbar content - double-click opens edit modal
   const NodesContent = () => (
@@ -3010,31 +3331,19 @@ const BuilderTab: React.FC = () => {
     />
   )
 
-  // More toolbar content
+  // More toolbar content (Demos, File Operations, Validation)
+  // Note: Animation controls are now in AnimateToolbar
   const MoreContent = () => (
     <MoreToolbar
-      joints={pylinkDoc.pylinkage.joints}
-      animationState={animationState}
-      playAnimation={playAnimation}
-      pauseAnimation={pauseAnimation}
-      stopAnimation={stopAnimation}
-      setPlaybackSpeed={setPlaybackSpeed}
-      setAnimatedPositions={setAnimatedPositions}
-      isSimulating={isSimulating}
-      trajectoryData={trajectoryData}
-      autoSimulateEnabled={autoSimulateEnabled}
-      setAutoSimulateEnabled={setAutoSimulateEnabled}
-      autoSimulateDelayMs={autoSimulateDelayMs}
-      runSimulation={runSimulation}
-      triggerMechanismChange={triggerMechanismChange}
-      showTrajectory={showTrajectory}
-      setShowTrajectory={setShowTrajectory}
-      stretchingLinks={stretchingLinks}
       loadDemo4Bar={loadDemo4Bar}
-      loadPylinkGraph={loadPylinkGraph}
+      loadDemoLeg={loadDemoLeg}
+      loadDemoWalker={loadDemoWalker}
+      loadDemoComplex={loadDemoComplex}
+      loadPylinkGraphLast={loadPylinkGraphLast}
+      loadFromFile={loadFromFile}
       savePylinkGraph={savePylinkGraph}
+      savePylinkGraphAs={savePylinkGraphAs}
       validateMechanism={validateMechanism}
-      showStatus={showStatus}
     />
   )
 
@@ -3281,10 +3590,10 @@ const BuilderTab: React.FC = () => {
       setLinkThickness={setLinkThickness}
       trajectoryDotSize={trajectoryDotSize}
       setTrajectoryDotSize={setTrajectoryDotSize}
-      selectionHighlightColor={selectionHighlightColor as SelectionHighlightColor}
-      setSelectionHighlightColor={setSelectionHighlightColor}
-      showMeasurementUnits={showMeasurementUnits}
-      setShowMeasurementUnits={setShowMeasurementUnits}
+      trajectoryDotOutline={trajectoryDotOutline}
+      setTrajectoryDotOutline={setTrajectoryDotOutline}
+      trajectoryDotOpacity={trajectoryDotOpacity}
+      setTrajectoryDotOpacity={setTrajectoryDotOpacity}
       trajectoryStyle={trajectoryStyle as TrajectoryStyle}
       setTrajectoryStyle={setTrajectoryStyle}
     />
@@ -3465,14 +3774,59 @@ const BuilderTab: React.FC = () => {
     showStatus('Loaded demo 4-bar linkage', 'success', 2000)
   }
 
+  // Load demo from backend
+  const loadDemoFromBackend = async (demoName: string) => {
+    try {
+      showStatus(`Loading ${demoName} demo...`, 'action')
+      const response = await fetch(`/api/load-demo?name=${demoName}`)
+
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const result = await response.json()
+
+      if (result.status === 'success' && result.data) {
+        // Check if it's the new hypergraph format
+        if (isHypergraphFormat(result.data)) {
+          setLinkageDoc(result.data)
+          // Restore drawnObjects if present in document
+          if (result.data.drawnObjects && Array.isArray(result.data.drawnObjects)) {
+            setDrawnObjects({ objects: result.data.drawnObjects, selectedIds: [] })
+          } else {
+            setDrawnObjects({ objects: [], selectedIds: [] })
+          }
+          setSelectedJoints([])
+          setSelectedLinks([])
+          clearTrajectory()
+          triggerMechanismChange()
+          showStatus(`Loaded ${demoName} demo`, 'success', 2000)
+        } else {
+          showStatus(`Demo ${demoName} is in legacy format - cannot load`, 'error', 3000)
+        }
+      } else {
+        showStatus(result.message || `Failed to load ${demoName} demo`, 'error', 3000)
+      }
+    } catch (error) {
+      showStatus(`Load error: ${error}`, 'error', 3000)
+    }
+  }
+
+  // Demo loaders
+  const loadDemoLeg = () => loadDemoFromBackend('leg')
+  const loadDemoWalker = () => loadDemoFromBackend('walker')
+  const loadDemoComplex = () => loadDemoFromBackend('complex')
+
   // Save pylink graph to server
   const savePylinkGraph = async () => {
     try {
       showStatus('Saving...', 'action')
+      // Include drawnObjects in the document for persistence
+      const docToSave = {
+        ...linkageDoc,
+        drawnObjects: drawnObjects.objects.length > 0 ? drawnObjects.objects : undefined
+      }
       const response = await fetch('/api/save-pylink-graph', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(linkageDoc)
+        body: JSON.stringify(docToSave)
       })
 
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
@@ -3535,10 +3889,10 @@ const BuilderTab: React.FC = () => {
     )
   }
 
-  // Load pylink graph from server (most recent)
-  const loadPylinkGraph = async () => {
+  // Load pylink graph from server (most recent) - used by "Load Last" button
+  const loadPylinkGraphLast = async () => {
     try {
-      showStatus('Loading...', 'action')
+      showStatus('Loading last saved...', 'action')
       const response = await fetch('/api/load-pylink-graph')
 
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
@@ -3549,6 +3903,12 @@ const BuilderTab: React.FC = () => {
         if (isHypergraphFormat(result.data)) {
           // New format - load directly
           setLinkageDoc(result.data)
+          // Restore drawnObjects if present in document
+          if (result.data.drawnObjects && Array.isArray(result.data.drawnObjects)) {
+            setDrawnObjects({ objects: result.data.drawnObjects, selectedIds: [] })
+          } else {
+            setDrawnObjects({ objects: [], selectedIds: [] })
+          }
           setSelectedJoints([])
           setSelectedLinks([])
           clearTrajectory()
@@ -3556,7 +3916,6 @@ const BuilderTab: React.FC = () => {
           showStatus(`Loaded ${result.filename}`, 'success', 3000)
         } else {
           // Legacy format - not supported anymore
-          // TODO: Add migration tool or backend conversion endpoint
           console.warn(`File ${result.filename} is in legacy format - cannot load directly`)
           showStatus(`Cannot load ${result.filename} - legacy format not supported. Re-save the file to update.`, 'error', 5000)
         }
@@ -3565,6 +3924,107 @@ const BuilderTab: React.FC = () => {
       }
     } catch (error) {
       showStatus(`Load error: ${error}`, 'error', 3000)
+    }
+  }
+
+  // Load pylink graph from server - show file picker dialog
+  const loadFromFile = async () => {
+    try {
+      showStatus('Fetching file list...', 'action')
+      const listResponse = await fetch('/api/list-pylink-graphs')
+
+      if (!listResponse.ok) throw new Error(`HTTP error! status: ${listResponse.status}`)
+      const listResult = await listResponse.json()
+
+      if (listResult.status !== 'success' || !listResult.files || listResult.files.length === 0) {
+        showStatus('No saved graphs found', 'warning', 3000)
+        return
+      }
+
+      // Create a simple file selection dialog using browser prompt
+      const files = listResult.files as Array<{ filename: string; name: string; saved_at: string }>
+      const fileOptions = files.slice(0, 20).map((f, i) => `${i + 1}. ${f.name} (${f.saved_at})`).join('\n')
+      const selection = prompt(`Select a file to load:\n\n${fileOptions}\n\nEnter number (1-${Math.min(files.length, 20)}):`)
+
+      if (!selection) {
+        showStatus('Load cancelled', 'info', 2000)
+        return
+      }
+
+      const idx = parseInt(selection, 10) - 1
+      if (isNaN(idx) || idx < 0 || idx >= files.length) {
+        showStatus('Invalid selection', 'error', 3000)
+        return
+      }
+
+      const selectedFile = files[idx]
+      showStatus(`Loading ${selectedFile.name}...`, 'action')
+
+      const response = await fetch(`/api/load-pylink-graph?filename=${encodeURIComponent(selectedFile.filename)}`)
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const result = await response.json()
+
+      if (result.status === 'success' && result.data) {
+        if (isHypergraphFormat(result.data)) {
+          setLinkageDoc(result.data)
+          // Restore drawnObjects if present in document
+          if (result.data.drawnObjects && Array.isArray(result.data.drawnObjects)) {
+            setDrawnObjects({ objects: result.data.drawnObjects, selectedIds: [] })
+          } else {
+            setDrawnObjects({ objects: [], selectedIds: [] })
+          }
+          setSelectedJoints([])
+          setSelectedLinks([])
+          clearTrajectory()
+          triggerMechanismChange()
+          showStatus(`Loaded ${result.filename}`, 'success', 3000)
+        } else {
+          showStatus(`Cannot load ${result.filename} - legacy format not supported`, 'error', 5000)
+        }
+      } else {
+        showStatus(result.message || 'Load failed', 'error', 3000)
+      }
+    } catch (error) {
+      showStatus(`Load error: ${error}`, 'error', 3000)
+    }
+  }
+
+  // Save pylink graph with custom filename
+  const savePylinkGraphAs = async () => {
+    const suggestedName = linkageDoc.name || 'untitled'
+    const filename = prompt('Enter filename to save as:', suggestedName)
+
+    if (!filename) {
+      showStatus('Save cancelled', 'info', 2000)
+      return
+    }
+
+    try {
+      showStatus('Saving...', 'action')
+      // Include drawnObjects in the document for persistence
+      const docToSave = {
+        ...linkageDoc,
+        drawnObjects: drawnObjects.objects.length > 0 ? drawnObjects.objects : undefined
+      }
+      const response = await fetch('/api/save-pylink-graph-as', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: docToSave,
+          filename: filename
+        })
+      })
+
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+      const result = await response.json()
+
+      if (result.status === 'success') {
+        showStatus(`Saved as ${result.filename}`, 'success', 3000)
+      } else {
+        showStatus(result.message || 'Save failed', 'error', 3000)
+      }
+    } catch (error) {
+      showStatus(`Save error: ${error}`, 'error', 3000)
     }
   }
 
@@ -3654,6 +4114,8 @@ const BuilderTab: React.FC = () => {
         <ToolbarToggleButtons
           openToolbars={openToolbars}
           onToggleToolbar={handleToggleToolbar}
+          darkMode={darkMode}
+          onInteract={animationState.isAnimating ? pauseAnimation : undefined}
         />
 
         {/* Draggable floating toolbars */}
@@ -3670,6 +4132,7 @@ const BuilderTab: React.FC = () => {
               initialPosition={getToolbarPosition(toolbarId)}
               onClose={() => handleToggleToolbar(toolbarId)}
               onPositionChange={handleToolbarPositionChange}
+              onInteract={animationState.isAnimating ? pauseAnimation : undefined}
               minWidth={dimensions.minWidth}
               maxHeight={dimensions.maxHeight}
             >
@@ -3695,6 +4158,29 @@ const BuilderTab: React.FC = () => {
         pathDrawState={pathDrawState}
         canvasWidth={canvasDimensions.width}
         onCancelAction={cancelAction}
+        darkMode={darkMode}
+      />
+
+      {/* Animation Toolbar - Centered at bottom */}
+      <AnimateToolbar
+        joints={pylinkDoc.pylinkage.joints}
+        animationState={animationState}
+        playAnimation={playAnimation}
+        pauseAnimation={pauseAnimation}
+        stopAnimation={stopAnimation}
+        setPlaybackSpeed={setPlaybackSpeed}
+        setAnimatedPositions={setAnimatedPositions}
+        setFrame={setAnimationFrame}
+        isSimulating={isSimulating}
+        trajectoryData={trajectoryData}
+        autoSimulateEnabled={autoSimulateEnabled}
+        setAutoSimulateEnabled={setAutoSimulateEnabled}
+        runSimulation={runSimulation}
+        triggerMechanismChange={triggerMechanismChange}
+        showTrajectory={showTrajectory}
+        setShowTrajectory={setShowTrajectory}
+        stretchingLinks={stretchingLinks}
+        showStatus={showStatus}
         darkMode={darkMode}
       />
 

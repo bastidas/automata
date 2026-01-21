@@ -204,13 +204,17 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = ({
   const currentMethodInfo = methodDescriptions[optMethod]
 
   return (
-    <Box sx={{ p: 2 }}>
+    <Box sx={{ p: 1.5, display: 'flex', gap: 2 }}>
       {/* ═══════════════════════════════════════════════════════════════════════
-          TARGET PATH SELECTION
+          COLUMN 1: TARGET PATH & PREPROCESSING
           ═══════════════════════════════════════════════════════════════════════ */}
-      <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#e91e63', mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-        <span>📍</span> Target Path
-      </Typography>
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        {/* ─────────────────────────────────────────────────────────────────────
+            TARGET PATH SELECTION
+            ───────────────────────────────────────────────────────────────────── */}
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#e91e63', mb: 1, display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
+          <span>📍</span> Target Path
+        </Typography>
 
       {targetPaths.length > 0 ? (
         <Box sx={{ mb: 2 }}>
@@ -315,9 +319,9 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = ({
           ═══════════════════════════════════════════════════════════════════════ */}
       {selectedPathId && selectedPath && (
         <>
-          <Divider sx={{ my: 2 }} />
+          <Divider sx={{ my: 1.5 }} />
 
-          <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#00897b', mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#00897b', mb: 1, display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
             <span>🔄</span> Path Preprocessing
           </Typography>
 
@@ -530,14 +534,18 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = ({
         </>
       )}
 
-      <Divider sx={{ my: 2 }} />
+      </Box>
 
       {/* ═══════════════════════════════════════════════════════════════════════
-          SIMULATION STEPS (N_STEPS)
+          COLUMN 2: METHOD & HYPERPARAMETERS
           ═══════════════════════════════════════════════════════════════════════ */}
-      <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#6a1b9a', mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-        <span>📊</span> Simulation Steps
-      </Typography>
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        {/* ─────────────────────────────────────────────────────────────────────
+            SIMULATION STEPS (N_STEPS)
+            ───────────────────────────────────────────────────────────────────── */}
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#6a1b9a', mb: 1, display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
+          <span>📊</span> Simulation Steps
+        </Typography>
 
       <Box sx={{ mb: 2 }}>
         <Tooltip title="Number of trajectory points for simulation and optimization. Higher = more precision but slower. Should match preprocessed trajectory points." placement="right">
@@ -572,12 +580,12 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = ({
         )}
       </Box>
 
-      <Divider sx={{ my: 2 }} />
+      <Divider sx={{ my: 1.5 }} />
 
-      {/* ═══════════════════════════════════════════════════════════════════════
+      {/* ─────────────────────────────────────────────────────────────────────
           OPTIMIZATION METHOD
-          ═══════════════════════════════════════════════════════════════════════ */}
-      <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1976d2', mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          ───────────────────────────────────────────────────────────────────── */}
+      <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#1976d2', mb: 1, display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
         <span>🔧</span> Method
       </Typography>
 
@@ -625,12 +633,12 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = ({
         </Box>
       </Box>
 
-      <Divider sx={{ my: 2 }} />
+      <Divider sx={{ my: 1.5 }} />
 
-      {/* ═══════════════════════════════════════════════════════════════════════
+      {/* ─────────────────────────────────────────────────────────────────────
           HYPERPARAMETERS
-          ═══════════════════════════════════════════════════════════════════════ */}
-      <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#7b1fa2', mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          ───────────────────────────────────────────────────────────────────── */}
+      <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#7b1fa2', mb: 1, display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
         <span>⚙️</span> Hyperparameters
       </Typography>
 
@@ -716,14 +724,18 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = ({
         </>
       )}
 
-      <Divider sx={{ my: 2 }} />
+      </Box>
 
       {/* ═══════════════════════════════════════════════════════════════════════
-          BOUNDS & CONSTRAINTS
+          COLUMN 3: BOUNDS & RUN OPTIMIZATION
           ═══════════════════════════════════════════════════════════════════════ */}
-      <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#ed6c02', mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-        <span>📐</span> Bounds
-      </Typography>
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        {/* ─────────────────────────────────────────────────────────────────────
+            BOUNDS & CONSTRAINTS
+            ───────────────────────────────────────────────────────────────────── */}
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, color: '#ed6c02', mb: 1, display: 'flex', alignItems: 'center', gap: 1, fontSize: '0.8rem' }}>
+          <span>📐</span> Bounds
+        </Typography>
 
       <Box sx={{ mb: 1.5 }}>
         <Tooltip title="How much link lengths can vary from initial values. Factor of 2.0 means lengths can be 0.5x to 2.0x original" placement="left">
@@ -763,12 +775,12 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = ({
         />
       </Box>
 
-      <Divider sx={{ my: 2 }} />
+      <Divider sx={{ my: 1.5 }} />
 
-      {/* ═══════════════════════════════════════════════════════════════════════
+      {/* ─────────────────────────────────────────────────────────────────────
           RUN OPTIMIZATION
-          ═══════════════════════════════════════════════════════════════════════ */}
-      <Box sx={{ mb: 2 }}>
+          ───────────────────────────────────────────────────────────────────── */}
+      <Box sx={{ mb: 1.5 }}>
         <FormControlLabel
           control={
             <Switch
@@ -1012,6 +1024,7 @@ export const OptimizationToolbar: React.FC<OptimizationToolbarProps> = ({
           </Box>
         </Box>
       )}
+      </Box>
     </Box>
   )
 }

@@ -911,6 +911,7 @@ def compute_trajectory(
     pylink_data: dict,
     verbose: bool = False,
     skip_sync: bool = False,
+    use_native_hypergraph: bool = True,
 ) -> TrajectoryResult:
     """
     Compute joint trajectories from PylinkDocument or LinkageDocument format.
@@ -926,6 +927,9 @@ def compute_trajectory(
         skip_sync: If True, skip syncing distances from visual positions.
                    Use this for optimization when you want the stored distances
                    to be used directly without being overwritten by meta positions.
+        use_native_hypergraph: If True (default), use pylinkage's native hypergraph
+                              module for conversion. This is cleaner and more maintainable.
+                              Set to False to use legacy custom conversion.
 
     Returns:
         TrajectoryResult with trajectories or error
@@ -936,27 +940,57 @@ def compute_trajectory(
     # FORMAT DETECTION AND CONVERSION
     # ─────────────────────────────────────────────────────────────────────────
     if is_hypergraph_format(pylink_data):
-        if verbose:
-            print('  Detected hypergraph format (v2.0.0), converting to legacy...')
-        converted = convert_hypergraph_to_legacy(pylink_data, verbose=verbose)
+        if use_native_hypergraph:
+            # Use pylinkage's native hypergraph module (preferred)
+            if verbose:
+                print('  Detected hypergraph format, using native pylinkage conversion...')
 
-        # Check for validation issues from conversion
-        validation_issues = converted.get('_validation_issues', [])
-        unprocessed_nodes = converted.get('_unprocessed_nodes', [])
+            from pylink_tools.hypergraph_adapter import simulate_hypergraph
 
-        if unprocessed_nodes:
-            # Report underconstrained mechanism
+            result = simulate_hypergraph(pylink_data, n_steps=n_steps)
+
+            if not result.success:
+                return TrajectoryResult(
+                    success=False,
+                    trajectories={},
+                    n_steps=n_steps,
+                    joint_types={},
+                    error=result.error or 'Unknown error in native hypergraph simulation',
+                )
+
+            # Build joint_types (all revolute for hypergraph mechanisms)
+            joint_types = {name: 'Revolute' for name in result.joint_names}
+
             return TrajectoryResult(
-                success=False,
-                trajectories={},
+                success=True,
+                trajectories=result.trajectories,
                 n_steps=n_steps,
-                joint_types={},
-                error=f"Underconstrained mechanism: nodes {unprocessed_nodes} cannot be simulated. "
-                f"Each follower node needs exactly 2 edges connecting to other nodes in the kinematic chain.",
+                joint_types=joint_types,
             )
 
-        # Use converted data
-        pylink_data = converted
+        else:
+            # Legacy custom conversion path
+            if verbose:
+                print('  Detected hypergraph format (v2.0.0), converting to legacy...')
+            converted = convert_hypergraph_to_legacy(pylink_data, verbose=verbose)
+
+            # Check for validation issues from conversion
+            validation_issues = converted.get('_validation_issues', [])
+            unprocessed_nodes = converted.get('_unprocessed_nodes', [])
+
+            if unprocessed_nodes:
+                # Report underconstrained mechanism
+                return TrajectoryResult(
+                    success=False,
+                    trajectories={},
+                    n_steps=n_steps,
+                    joint_types={},
+                    error=f"Underconstrained mechanism: nodes {unprocessed_nodes} cannot be simulated. "
+                    f"Each follower node needs exactly 2 edges connecting to other nodes in the kinematic chain.",
+                )
+
+            # Use converted data
+            pylink_data = converted
 
     # Parse input (now always in legacy format)
     pylinkage_data = pylink_data.get('pylinkage', {})

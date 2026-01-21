@@ -12,7 +12,10 @@ export { NodesToolbar } from './NodesToolbar'
 export type { NodesToolbarProps } from './NodesToolbar'
 
 export { MoreToolbar } from './MoreToolbar'
-export type { MoreToolbarProps, AnimationState } from './MoreToolbar'
+export type { MoreToolbarProps } from './MoreToolbar'
+
+export { AnimateToolbar } from './AnimateToolbar'
+export type { AnimateToolbarProps, AnimationState } from './AnimateToolbar'
 
 export { SettingsToolbar } from './SettingsToolbar'
 export type {

@@ -370,6 +370,26 @@ export interface LinkageMeta {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
+ * Drawn object for visualization (polygons, paths, etc.)
+ * These can be merged with links and move rigidly with them.
+ */
+export interface DrawnObjectData {
+  id: string
+  type: 'polygon' | 'path' | 'rectangle' | 'ellipse'
+  name: string
+  points: [number, number][]     // Vertices for polygon/path
+  fillColor: string
+  strokeColor: string
+  strokeWidth: number
+  fillOpacity: number
+  closed: boolean
+  mergedLinkName?: string        // If merged with a link, the link's name
+  // Rigid attachment: store link positions at merge time for transformation
+  mergedLinkOriginalStart?: [number, number]
+  mergedLinkOriginalEnd?: [number, number]
+}
+
+/**
  * Complete document format for saving/loading.
  *
  * Combines the kinematic model (HypergraphLinkage) with UI metadata.
@@ -387,6 +407,9 @@ export interface LinkageDocument {
 
   /** UI metadata for rendering */
   meta: LinkageMeta
+
+  /** Optional: Drawn objects (polygons, shapes) for visualization */
+  drawnObjects?: DrawnObjectData[]
 
   /** Optional: Component library used by this document */
   components?: Record<string, Component>
