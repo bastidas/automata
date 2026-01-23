@@ -63,6 +63,12 @@ from .achievable_target import apply_dimension_variations
 from .achievable_target import apply_static_joint_movement
 from .achievable_target import create_achievable_target
 from .achievable_target import verify_mechanism_viable
+from .sampling import generate_valid_samples
+from .sampling import generate_viable_sobol_samples
+from .sampling import get_combinatoric_gradations
+from .sampling import get_mech_variations
+from .sampling import get_mech_variations_from_spec
+from .sampling import presample_valid_positions
 from .topology_changes import AddLinkChange
 from .topology_changes import AddNodeChange
 from .topology_changes import apply_topology_change
@@ -75,14 +81,7 @@ from .variation_config import AchievableTargetConfig
 from .variation_config import DimensionVariationConfig
 from .variation_config import StaticJointMovementConfig
 from .variation_config import TopologyChangeConfig
-
 # Sampling and DOE functions
-from .sampling import generate_valid_samples
-from .sampling import generate_viable_sobol_samples
-from .sampling import get_combinatoric_gradations
-from .sampling import get_mech_variations
-from .sampling import get_mech_variations_from_spec
-from .sampling import presample_valid_positions
 
 # Configuration classes
 # Core functions and result types

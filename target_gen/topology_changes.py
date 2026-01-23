@@ -155,8 +155,8 @@ def validate_topology_change(
         NotImplementedError: Always (not yet implemented)
     """
     raise NotImplementedError(
-        f"Topology change validation not yet implemented. "
-        f"Change type: {change.change_type}",
+        f'Topology change validation not yet implemented. '
+        f'Change type: {change.change_type}',
     )
 
 
@@ -188,8 +188,8 @@ def apply_topology_change(
         ValueError: If change validation fails (future)
     """
     raise NotImplementedError(
-        f"Topology change application not yet implemented. "
-        f"Change type: {change.change_type}",
+        f'Topology change application not yet implemented. '
+        f'Change type: {change.change_type}',
     )
 
 
@@ -219,6 +219,6 @@ def suggest_topology_changes(
         NotImplementedError: Always (not yet implemented)
     """
     raise NotImplementedError(
-        f"Topology change suggestions not yet implemented. "
-        f"Goal: {optimization_goal}",
+        f'Topology change suggestions not yet implemented. '
+        f'Goal: {optimization_goal}',
     )

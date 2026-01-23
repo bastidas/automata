@@ -351,9 +351,9 @@ def create_achievable_target(
 
                 # Log success if it took multiple attempts
                 if total_attempts > 1:
-                    range_info = f" (±{variation_range*100:.0f}%)" if is_fallback else ''
+                    range_info = f' (±{variation_range*100:.0f}%)' if is_fallback else ''
                     print(
-                        f"  Found valid target dimensions after {total_attempts} attempts{range_info}",
+                        f'  Found valid target dimensions after {total_attempts} attempts{range_info}',
                     )
 
                 return AchievableTargetResult(
@@ -369,12 +369,12 @@ def create_achievable_target(
         if is_fallback and range_idx < len(ranges_to_try) - 1:
             print(
                 f"  Warning: Couldn't find valid dimensions with ±{variation_range*100:.0f}%, "
-                f"trying smaller range...",
+                f'trying smaller range...',
             )
 
     raise ValueError(
-        f"Could not find valid target dimensions after {total_attempts} attempts "
-        f"across {len(ranges_to_try)} variation ranges.",
+        f'Could not find valid target dimensions after {total_attempts} attempts '
+        f'across {len(ranges_to_try)} variation ranges.',
     )
 
 

@@ -377,14 +377,14 @@ def generate_valid_samples(
     # Validate parameters
     if validation == 'fitness' and target is None:
         raise ValueError("validation='fitness' requires target parameter")
-    
+
     if selection == 'best' and validation != 'fitness':
         raise ValueError("selection='best' requires validation='fitness'")
-    
+
     num_dims = len(dimension_spec)
     if num_dims == 0:
         raise ValueError('DimensionSpec has no dimensions')
-    
+
     # Set default max_attempts based on mode
     if max_attempts is None:
         if validation == 'viability':
@@ -393,12 +393,12 @@ def generate_valid_samples(
         else:
             # Fitness mode: evaluate all requested samples
             max_attempts = n_requested
-    
+
     logger.info(
         f'Generating valid samples: mode={mode}, validation={validation}, '
-        f'selection={selection}, requesting {n_requested}, max_attempts={max_attempts}'
+        f'selection={selection}, requesting {n_requested}, max_attempts={max_attempts}',
     )
-    
+
     # Import validation functions as needed
     if validation == 'viability':
         from target_gen.achievable_target import verify_mechanism_viable
@@ -409,15 +409,15 @@ def generate_valid_samples(
             pylink_data, target, dimension_spec,
             metric=metric, phase_invariant=phase_invariant,
         )
-    
+
     valid_samples: list[np.ndarray] = []
     valid_scores: list[float] = []
     n_generated = 0
     n_invalid = 0
-    
+
     # Generate and validate samples in batches
     batch_size = min(256, max_attempts)
-    
+
     while n_generated < max_attempts and len(valid_samples) < n_requested:
         # Determine batch size
         remaining_attempts = max_attempts - n_generated
@@ -428,10 +428,10 @@ def generate_valid_samples(
         else:
             # For 'best' selection, generate all max_attempts samples
             current_batch_size = min(batch_size, remaining_attempts)
-        
+
         if current_batch_size <= 0:
             break
-        
+
         # Generate sample batch
         try:
             variations = get_mech_variations_from_spec(
@@ -451,44 +451,44 @@ def generate_valid_samples(
                 dict(zip(dimension_spec.names, row))
                 for row in random_samples
             ]
-        
+
         # Validate each sample
         for var in variations:
             n_generated += 1
-            
+
             # Convert dict to array
             sample_array = np.array([var[name] for name in dimension_spec.names])
-            
+
             try:
                 if validation == 'viability':
                     # Just check if mechanism is viable
                     test_config = apply_dimensions_from_array(
-                        pylink_data, tuple(sample_array), dimension_spec, inplace=False
+                        pylink_data, tuple(sample_array), dimension_spec, inplace=False,
                     )
                     is_valid = verify_mechanism_viable(test_config, target_joint)
-                    
+
                     if is_valid:
                         valid_samples.append(sample_array)
                         if selection == 'first' and len(valid_samples) >= n_requested:
                             break
                     else:
                         n_invalid += 1
-                
+
                 else:  # fitness validation
                     # Evaluate fitness score
                     dims_tuple = tuple(sample_array)
                     score = fitness_func(dims_tuple)
-                    
+
                     if np.isfinite(score):
                         valid_samples.append(sample_array)
                         valid_scores.append(score)
                     else:
                         n_invalid += 1
-            
+
             except Exception:
                 n_invalid += 1
                 continue
-        
+
         # Check viable ratio after reasonable sample size
         if n_generated >= 100 and validation == 'viability':
             viable_ratio = len(valid_samples) / n_generated
@@ -496,57 +496,57 @@ def generate_valid_samples(
                 logger.warning(
                     f'Valid ratio ({viable_ratio:.1%}) below threshold '
                     f'({min_viable_ratio:.1%}) after {n_generated} samples. '
-                    f'Consider tightening bounds or adjusting constraints.'
+                    f'Consider tightening bounds or adjusting constraints.',
                 )
                 if len(valid_samples) < n_requested * 0.25:
                     logger.error(
                         f'Only found {len(valid_samples)}/{n_requested} valid samples '
-                        f'with very low valid ratio. May indicate highly constrained space.'
+                        f'with very low valid ratio. May indicate highly constrained space.',
                     )
                     break
-    
+
     # Compute final statistics
     valid_ratio = len(valid_samples) / n_generated if n_generated > 0 else 0
     logger.info(
         f'Sampling complete: {len(valid_samples)}/{n_requested} requested, '
-        f'{n_generated} total attempts, {valid_ratio:.1%} valid ratio'
+        f'{n_generated} total attempts, {valid_ratio:.1%} valid ratio',
     )
-    
+
     if len(valid_samples) == 0:
         raise ValueError(
             f'No valid samples found after {n_generated} attempts. '
-            'Mechanism may be over-constrained or bounds may be too wide.'
+            'Mechanism may be over-constrained or bounds may be too wide.',
         )
-    
+
     # Apply selection strategy
     if selection == 'best' and validation == 'fitness':
         # Sort by score and take best n_requested
         sorted_indices = np.argsort(valid_scores)[:n_requested]
         selected_samples = [valid_samples[i] for i in sorted_indices]
         selected_scores = [valid_scores[i] for i in sorted_indices]
-        
+
         samples_array = np.array(selected_samples)
         scores_array = np.array(selected_scores)
-        
+
         logger.info(f'Returning {len(samples_array)} best samples (best score: {scores_array[0]:.4f})')
         return samples_array, scores_array, n_generated
-    
+
     elif selection == 'first':
         # Return first n_requested found
         selected_samples = valid_samples[:n_requested]
         samples_array = np.array(selected_samples)
-        
+
         if validation == 'fitness':
             selected_scores = valid_scores[:n_requested]
             scores_array = np.array(selected_scores)
             return samples_array, scores_array, n_generated
         else:
             return samples_array, None, n_generated
-    
+
     else:
         # Default: return all found (up to n_requested)
         samples_array = np.array(valid_samples[:n_requested])
-        
+
         if validation == 'fitness':
             scores_array = np.array(valid_scores[:n_requested])
             return samples_array, scores_array, n_generated
@@ -601,9 +601,9 @@ def presample_valid_positions(
     """
     logger.warning(
         'presample_valid_positions is deprecated. '
-        'Use generate_valid_samples(validation="fitness", selection="best") instead.'
+        'Use generate_valid_samples(validation="fitness", selection="best") instead.',
     )
-    
+
     samples, scores, _ = generate_valid_samples(
         pylink_data=pylink_data,
         dimension_spec=dimension_spec,
@@ -617,7 +617,7 @@ def presample_valid_positions(
         seed=seed,
         phase_invariant=phase_invariant,
     )
-    
+
     return samples, scores
 
 
@@ -663,9 +663,9 @@ def generate_viable_sobol_samples(
     """
     logger.warning(
         'generate_viable_sobol_samples is deprecated. '
-        'Use generate_valid_samples(validation="viability", mode="sobol") instead.'
+        'Use generate_valid_samples(validation="viability", mode="sobol") instead.',
     )
-    
+
     samples, _, n_generated = generate_valid_samples(
         pylink_data=pylink_data,
         dimension_spec=dimension_spec,
@@ -678,5 +678,5 @@ def generate_viable_sobol_samples(
         seed=seed,
         min_viable_ratio=min_viable_ratio,
     )
-    
+
     return samples, n_generated

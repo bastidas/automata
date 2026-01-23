@@ -13,15 +13,15 @@ License: NLopt is under LGPL license (permissive for commercial use)
 """
 from __future__ import annotations
 
-# import copy
 import logging
 import time
 from dataclasses import dataclass
-# from dataclasses import field
 from typing import Literal
 from typing import TYPE_CHECKING
 
 import numpy as np
+# import copy
+# from dataclasses import field
 
 if TYPE_CHECKING:
     from pylink_tools.optimization_types import (
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class NLoptMLSLConfig:
@@ -167,7 +168,7 @@ def run_nlopt_mlsl(
         metric=metric,
         verbose=False,
         phase_invariant=phase_invariant,
-        phase_align_method=phase_align_method
+        phase_align_method=phase_align_method,
     )
 
     # Compute initial error

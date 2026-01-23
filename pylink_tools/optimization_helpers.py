@@ -379,13 +379,13 @@ def get_combinatoric_gradations(
 ) -> dict[str, list[float]]:
     """
     DEPRECATED: Use target_gen.sampling.get_combinatoric_gradations instead.
-    
+
     This function has been moved to the target_gen.sampling module for better organization.
     """
     from target_gen.sampling import get_combinatoric_gradations as _new_func
     logger.warning(
         'get_combinatoric_gradations has moved to target_gen.sampling. '
-        'Please update your imports: from target_gen.sampling import get_combinatoric_gradations'
+        'Please update your imports: from target_gen.sampling import get_combinatoric_gradations',
     )
     return _new_func(names, bounds, n)
 
@@ -395,13 +395,13 @@ def get_mech_variations(
 ) -> list[dict[str, float]]:
     """
     DEPRECATED: Use target_gen.sampling.get_mech_variations instead.
-    
+
     This function has been moved to the target_gen.sampling module for better organization.
     """
     from target_gen.sampling import get_mech_variations as _new_func
     logger.warning(
         'get_mech_variations has moved to target_gen.sampling. '
-        'Please update your imports: from target_gen.sampling import get_mech_variations'
+        'Please update your imports: from target_gen.sampling import get_mech_variations',
     )
     return _new_func(gradations)
 
@@ -415,13 +415,13 @@ def get_mech_variations_from_spec(
 ) -> list[dict[str, float]]:
     """
     DEPRECATED: Use target_gen.sampling.get_mech_variations_from_spec instead.
-    
+
     This function has been moved to the target_gen.sampling module for better organization.
     """
     from target_gen.sampling import get_mech_variations_from_spec as _new_func
     logger.warning(
         'get_mech_variations_from_spec has moved to target_gen.sampling. '
-        'Please update your imports: from target_gen.sampling import get_mech_variations_from_spec'
+        'Please update your imports: from target_gen.sampling import get_mech_variations_from_spec',
     )
     return _new_func(spec, n, mode, center, seed)
 
@@ -439,12 +439,12 @@ def presample_valid_positions(
 ):
     """
     DEPRECATED: Use target_gen.sampling.presample_valid_positions instead.
-    
+
     This function has been moved to the target_gen.sampling module for better organization.
     """
     from target_gen.sampling import presample_valid_positions as _new_func
     logger.warning(
         'presample_valid_positions has moved to target_gen.sampling. '
-        'Please update your imports: from target_gen.sampling import presample_valid_positions'
+        'Please update your imports: from target_gen.sampling import presample_valid_positions',
     )
     return _new_func(pylink_data, target, dimension_spec, n_samples, n_best, mode, metric, seed, phase_invariant)
