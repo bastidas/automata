@@ -76,6 +76,7 @@ export interface UseMoveGroupReturn {
 }
 
 const BBOX_PADDING = 0.5
+const ROTATE_MIN_RADIUS = 2
 
 function angleDiff(a: number, b: number): number {
   let d = a - b
@@ -90,6 +91,21 @@ function rotatePointAboutPivot(p: CanvasPoint, pivot: CanvasPoint, angleRad: num
   const dx = p[0] - pivot[0]
   const dy = p[1] - pivot[1]
   return [pivot[0] + dx * cos - dy * sin, pivot[1] + dx * sin + dy * cos]
+}
+
+function angleFromPivotWithDeadzone(
+  point: CanvasPoint,
+  pivot: CanvasPoint,
+  fallbackAngle: number | null = null
+): number {
+  const dx = point[0] - pivot[0]
+  const dy = point[1] - pivot[1]
+  const radius = Math.hypot(dx, dy)
+  if (radius < ROTATE_MIN_RADIUS) {
+    if (fallbackAngle != null) return fallbackAngle
+    return 0
+  }
+  return Math.atan2(dy, dx)
 }
 
 function selectionCentroid(state: MoveGroupState): CanvasPoint | null {
@@ -214,12 +230,14 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
       if (clickedOnJoint || clickedOnGroupLink || clickedInBoundingBox || clickedOnDrawnObj) {
         const centroid = selectionCentroid(moveGroupState)
         const wantRotate =
-          toolMode === 'mechanism_select' && event.altKey && centroid != null
+          (toolMode === 'mechanism_select' || toolMode === 'group_select') &&
+          event.altKey &&
+          centroid != null
         const dragMode = wantRotate ? 'rotate' : 'translate'
         const rotatePivot = wantRotate ? centroid : null
         const rotateRefAngle =
           wantRotate && rotatePivot
-            ? Math.atan2(clickPoint[1] - rotatePivot[1], clickPoint[0] - rotatePivot[0])
+            ? angleFromPivotWithDeadzone(clickPoint, rotatePivot)
             : null
 
         setMoveGroupState(prev => ({
@@ -279,7 +297,7 @@ export function useMoveGroup(params: UseMoveGroupParams): UseMoveGroupReturn {
           return false
         }
 
-        const curA = Math.atan2(currentPoint[1] - pivot[1], currentPoint[0] - pivot[0])
+        const curA = angleFromPivotWithDeadzone(currentPoint, pivot, refA)
         const angleRad = angleDiff(curA, refA)
 
         rotateGroupFromOriginal(

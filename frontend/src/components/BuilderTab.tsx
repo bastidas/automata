@@ -3074,7 +3074,7 @@ const BuilderTab: React.FC = () => {
 
   type SuggestedPolygon = { polygon_id: string; points: [number, number][]; contained_links: string[]; z_level: number }
 
-  const handleCreateForms = useCallback(async () => {
+  const handleCreateForms = useCallback(async (opts?: { missingOnly?: boolean }) => {
     if (!createRigidForms && !createLinkForms) {
       showStatus('Turn on "Create rigid forms" and/or "Create link forms"', 'warning', 3000)
       return
@@ -3175,6 +3175,32 @@ const BuilderTab: React.FC = () => {
           suggested = linkSuggested
           assignments = data.assignments ?? {}
           polygon_z_levels = data.polygon_z_levels ?? {}
+        }
+      }
+
+      if (opts?.missingOnly) {
+        const existingFormIds = new Set(
+          drawnObjects.objects
+            .filter((o): o is DrawnObject => o.type === 'polygon' && typeof o.id === 'string' && o.id.length > 0)
+            .map(o => o.id)
+        )
+        const priorCount = suggested.length
+        suggested = suggested.filter(sp => {
+          const isLinkForm = sp.contained_links.length === 1
+          const formId = isLinkForm
+            ? `link_form_${(sp.contained_links[0] ?? '').replace(/^link_/, '')}`
+            : sp.polygon_id
+          return !existingFormIds.has(formId)
+        })
+        if (suggested.length === 0) {
+          showStatus(
+            priorCount === 0
+              ? 'No forms suggested — enable rigid and/or link forms, or the mechanism has nothing to add.'
+              : 'No missing forms — every suggested form already exists on the canvas.',
+            'info',
+            4000
+          )
+          return
         }
       }
 
@@ -4015,6 +4041,7 @@ const BuilderTab: React.FC = () => {
         computeZLevelsAfterCreate,
         setComputeZLevelsAfterCreate,
         onCreateForms: handleCreateForms,
+        onCreateMissingForms: () => void handleCreateForms({ missingOnly: true }),
         onComputeLinkZLevels: handleComputeLinkZLevels,
         objects: drawnObjects.objects as import('./builder/rendering/types').DrawnObject[],
         selectedIds: drawnObjects.selectedIds,

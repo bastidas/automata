@@ -14,9 +14,11 @@ from form_tools.overlap import segments_intersect
 from form_tools.polygon_utils import bounding_polygon_for_links
 from form_tools.polygon_utils import build_polygon_entity_conflict_pairs
 from form_tools.polygon_utils import contained_links
+from form_tools.polygon_utils import polygons_overlap_positive_area
 from form_tools.polygon_utils import merge_two_polygons_geometry
 from form_tools.polygon_utils import validate_polygon_rigidity
 from form_tools.z_level import compute_link_z_levels
+from form_tools.z_level import config_from_request
 from form_tools.z_level import DEFAULT_Z_LEVEL_CONFIG
 from form_tools.z_level import ZLevelHeuristicConfig
 from pylink_tools.mechanism import create_mechanism_from_dict
@@ -652,3 +654,104 @@ class TestBuildPolygonEntityConflictPairs:
         )
         expected = tuple(sorted(('polygon:body', 'polygon:connector')))
         assert any(tuple(sorted((a, b))) == expected for a, b in pairs)
+
+    def test_boundary_shared_edge_polygons_do_not_add_overlap_conflict(self):
+        """Shared-edge-only contact has zero intersection area; must not force entity conflict."""
+        pa = [(0, 0), (2, 0), (2, 1), (0, 1)]
+        pb = [(2, 0), (4, 0), (4, 1), (2, 1)]
+        assert not polygons_overlap_positive_area(pa, pb)
+
+        linkage = {
+            'nodes': {
+                'A': {'position': [0.5, 0.5]},
+                'B': {'position': [1.5, 0.5]},
+                'C': {'position': [2.5, 0.5]},
+                'D': {'position': [3.5, 0.5]},
+            },
+            'edges': {
+                'e1': {'source': 'A', 'target': 'B'},
+                'e2': {'source': 'C', 'target': 'D'},
+            },
+        }
+        trajectories = {
+            'A': [[0.5, 0.5]],
+            'B': [[1.5, 0.5]],
+            'C': [[2.5, 0.5]],
+            'D': [[3.5, 0.5]],
+        }
+        polygons_for_z = [
+            {'id': 'p1', 'contained_links': ['e1'], 'points': pa},
+            {'id': 'p2', 'contained_links': ['e2'], 'points': pb},
+        ]
+        pairs = build_polygon_entity_conflict_pairs(
+            polygons_for_z, linkage, trajectories, margin_fraction=0.05,
+        )
+        key = tuple(sorted(('polygon:p1', 'polygon:p2')))
+        assert not any(tuple(sorted((a, b))) == key for a, b in pairs)
+
+
+def test_debug_json_fixed_pins_compute_z_levels_succeeds():
+    """Regression: debug mechanism with all forms pinned should admit the pinned z-levels."""
+    import numpy as np
+
+    root = Path(__file__).resolve().parents[1]
+    path = root / 'user/graphs/debug.json'
+    if not path.is_file():
+        pytest.skip('user/graphs/debug.json not present')
+
+    data = json.loads(path.read_text(encoding='utf-8'))
+    linkage = data['linkage']
+    meta = data.get('meta', {})
+    drawn = data.get('drawnObjects') or []
+
+    drawn_for_api: list[dict] = []
+    for o in drawn:
+        if o.get('type') == 'polygon' and o.get('contained_links'):
+            row: dict = {'id': o['id'], 'type': 'polygon', 'contained_links': list(o['contained_links'])}
+            pts = o.get('points')
+            if isinstance(pts, list) and len(pts) >= 3:
+                row['points'] = pts
+            drawn_for_api.append(row)
+
+    fixed: dict[str, int] = {}
+    for o in drawn:
+        if o.get('type') == 'polygon' and o.get('z_level_fixed') and o.get('z_level') is not None:
+            fixed['polygon:' + o['id']] = int(o['z_level'])
+
+    pylink_data = {'linkage': linkage, 'meta': meta}
+    n_steps = 32
+    mech = create_mechanism_from_dict({**pylink_data, 'n_steps': n_steps}, n_steps=n_steps)
+    traj_arr = mech.simulate()
+    assert not np.isnan(traj_arr).any()
+
+    trajectories: dict[str, list[list[float]]] = {}
+    for i, jname in enumerate(mech._joint_names):
+        trajectories[jname] = [
+            [float(traj_arr[s, i, 0]), float(traj_arr[s, i, 1])]
+            for s in range(traj_arr.shape[0])
+        ]
+
+    extra_pairs = build_polygon_entity_conflict_pairs(
+        drawn_for_api,
+        linkage,
+        trajectories,
+        margin_fraction=0.05,
+        margin_units=2.0,
+    )
+
+    cfg = config_from_request({'hard_pins': fixed, 'min_z': 0})
+    assert cfg is not None
+
+    result = compute_link_z_levels(
+        pylink_data=pylink_data,
+        n_steps=n_steps,
+        use_trajectory_conflicts=True,
+        drawn_objects=drawn_for_api,
+        trajectories=trajectories,
+        extra_entity_conflict_pairs=extra_pairs,
+        z_level_config=cfg,
+        max_assignments=1,
+    )
+    assignments, polygon_z_levels = result
+    assert assignments and isinstance(assignments[0], dict)
+    assert polygon_z_levels.get('link_form_35_1') == fixed.get('polygon:link_form_35_1')

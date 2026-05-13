@@ -83,6 +83,54 @@ def polygons_intersect(
         return False
 
 
+def polygons_overlap_positive_area(
+    poly_a: list[tuple[float, float]],
+    poly_b: list[tuple[float, float]],
+    min_area: float = 1e-9,
+) -> bool:
+    """
+    True if the two polygons overlap with positive planar area.
+
+    Unlike polygons_intersect(), boundary-only contact (shared edge or tangent kiss)
+    yields ~0 intersection area and returns False. Used when deciding z-order
+    conflicts from outline overlap so coplanar outlines that merely touch along an
+    edge do not force distinct layers.
+    """
+    if len(poly_a) < 3 or len(poly_b) < 3:
+        return False
+    try:
+        shp_a = ShapelyPolygon(poly_a)
+        shp_b = ShapelyPolygon(poly_b)
+        if not shp_a.is_valid:
+            shp_a = shp_a.buffer(0)
+        if not shp_b.is_valid:
+            shp_b = shp_b.buffer(0)
+        if shp_a.is_empty or shp_b.is_empty:
+            return False
+        inter = shp_a.intersection(shp_b)
+        return float(getattr(inter, 'area', 0.0) or 0.0) > min_area
+    except Exception:
+        return False
+
+
+def _connector_trajectory_penetrates_polygon(joint_geom: Any, poly: Any) -> bool:
+    """
+    True if a joint sample or motion segment intersects another form's polygon with
+    more than boundary-only contact (Point or LineString vs Polygon).
+
+    Uses intersects and not touches so grazing/tangent motion along an outline does
+    not force distinct z-levels.
+    """
+    try:
+        if joint_geom.is_empty or poly.is_empty:
+            return False
+        if not joint_geom.intersects(poly):
+            return False
+        return not joint_geom.touches(poly)
+    except Exception:
+        return False
+
+
 def merge_two_polygons_geometry(
     points_a: list[tuple[float, float]],
     points_b: list[tuple[float, float]],
@@ -959,8 +1007,10 @@ def build_polygon_entity_conflict_pairs(
     overlap over time (segment-segment may not intersect but polygon bounds do).
 
     Used by compute-link-z-levels: for each timestep, compute bounding polygon
-    per form; if two forms' polygons intersect at any step, add (eid1, eid2)
-    so they get different z-levels. Entity IDs are "polygon:" + polygon id.
+    per form; if two forms' polygons have positive planar overlap (intersection
+    area > min threshold), add (eid1, eid2) so they get different z-levels.
+    Boundary-only contact (shared edge, zero-area intersection) does not add a pair.
+    Entity IDs are "polygon:" + polygon id.
 
     Args:
         polygons_for_z: List of drawn-object dicts with "id" and "contained_links".
@@ -971,8 +1021,12 @@ def build_polygon_entity_conflict_pairs(
 
     Returns:
         When include_diagnostics is False (default): deduplicated list of (eid1, eid2) with eid1 < eid2.
-        When include_diagnostics is True: (pairs, diagnostics), where diagnostics contains first witness metadata
-        per pair (reason, first_step, optional witness_point, optional joint_name).
+    When include_diagnostics is True: (pairs, diagnostics), where diagnostics contains first witness metadata
+    per pair (reason, first_step, optional witness_point, optional joint_name).
+
+    Polygon-vs-polygon overlap uses positive planar intersection area only (shared edges /
+    tangent contact do not count). Connector swept-motion checks use short segments aligned
+    with each body timestep so the full joint path is not matched against every historical hull.
     """
     n_steps_actual = min(len(v) for v in trajectories.values() if v) if trajectories else 0
     if not linkage or n_steps_actual <= 0 or len(polygons_for_z) < 2:
@@ -1105,11 +1159,11 @@ def build_polygon_entity_conflict_pairs(
         keys = list(polys_at_step.keys())
         for i, eid1 in enumerate(keys):
             for eid2 in keys[i + 1:]:
-                if polygons_intersect(polys_at_step[eid1], polys_at_step[eid2]):
+                if polygons_overlap_positive_area(polys_at_step[eid1], polys_at_step[eid2]):
                     _record_pair(
                         eid1,
                         eid2,
-                        reason='polygon_overlap_at_step',
+                        reason='polygon_overlap_interior_at_step',
                         step=step,
                     )
 
@@ -1135,42 +1189,46 @@ def build_polygon_entity_conflict_pairs(
                             joint_name=joint_name,
                         )
 
-    # Hard guard (swept): connector joint trajectory cannot pass through another form's swept area.
+    # Between-sample motion vs foreign bodies: use each timestep's segment with that
+    # timestep's (and next timestep's) body snapshot only. Matching the full
+    # trajectory polyline against every historical hull caused false positives when a
+    # joint path crossed another layer's outline from a different pose.
     for connector_eid, connector_link in connector_forms.items():
         source_joint, target_joint = link_endpoints.get(connector_link, (None, None))
         for joint_name in (source_joint, target_joint):
             if not joint_name:
                 continue
-            trajectory_points: list[tuple[float, float]] = []
-            for step in range(n_steps_actual):
-                p = _joint_xy(joint_name, step)
-                if p is not None:
-                    trajectory_points.append(p)
-            if not trajectory_points:
-                continue
-            joint_geom: Any
-            if len(trajectory_points) == 1:
-                joint_geom = ShapelyPoint(*trajectory_points[0])
-            else:
-                try:
-                    joint_geom = ShapelyLineString(trajectory_points)
-                except Exception:
-                    # Degenerate trajectory (all points identical) can fail as a line.
-                    joint_geom = ShapelyPoint(*trajectory_points[0])
-            for other_eid, geoms in polygon_geoms_over_time.items():
-                if other_eid == connector_eid or not geoms:
+            for step in range(max(0, n_steps_actual - 1)):
+                p0 = _joint_xy(joint_name, step)
+                p1 = _joint_xy(joint_name, step + 1)
+                if p0 is None or p1 is None:
                     continue
                 try:
-                    if any(g.intersects(joint_geom) for g in geoms):
+                    seg = ShapelyLineString([p0, p1])
+                except Exception:
+                    continue
+                if seg.length <= 1e-15:
+                    continue
+                for other_eid, geoms in polygon_geoms_over_time.items():
+                    if other_eid == connector_eid or not geoms:
+                        continue
+                    hit = False
+                    if step < len(geoms) and _connector_trajectory_penetrates_polygon(seg, geoms[step]):
+                        hit = True
+                    if (
+                        not hit
+                        and step + 1 < len(geoms)
+                        and _connector_trajectory_penetrates_polygon(seg, geoms[step + 1])
+                    ):
+                        hit = True
+                    if hit:
                         _record_pair(
                             connector_eid,
                             other_eid,
                             reason='connector_joint_swept_path_intersects_body',
-                            step=None,
+                            step=step,
                             joint_name=joint_name,
                         )
-                except Exception:
-                    continue
     dedup_pairs = list({_pair_key(a, b) for a, b in pairs})
     if include_diagnostics:
         rows = [diagnostics[k] for k in sorted(diagnostics.keys())]

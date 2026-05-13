@@ -55,6 +55,8 @@ export interface FormsToolbarProps {
   computeZLevelsAfterCreate: boolean
   setComputeZLevelsAfterCreate: (v: boolean) => void
   onCreateForms: () => void | Promise<void>
+  /** Same flow as Create forms, but only polygons not already present on the canvas (by id) */
+  onCreateMissingForms?: () => void | Promise<void>
   onComputeLinkZLevels: () => void | Promise<void>
   /** Polygon drawn objects (forms) */
   objects: DrawnObject[]
@@ -89,6 +91,7 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
   computeZLevelsAfterCreate,
   setComputeZLevelsAfterCreate,
   onCreateForms,
+  onCreateMissingForms,
   onComputeLinkZLevels,
   objects,
   selectedIds,
@@ -208,7 +211,7 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
       />
 
       <Tooltip
-        title="Create polygons from rigid groups and/or one per link; uses padding above. We do not create new forms on links that already have forms attached."
+        title="Create polygons from rigid groups and/or one per link; uses padding above. The server skips links that already appear in any form’s contained-links list."
         placement="left"
         leaveDelay={0}
         disableInteractive
@@ -225,6 +228,33 @@ export const FormsToolbar: React.FC<FormsToolbarProps> = ({
           Create forms
         </Button>
       </Tooltip>
+
+      {onCreateMissingForms && (
+        <Tooltip
+          title="Same as Create forms, but only adds forms that are not already on the canvas (by form id). Use after deleting one form or when some links never got a form."
+          placement="left"
+          leaveDelay={0}
+          disableInteractive
+          enterDelay={400}
+        >
+          <Button
+            variant="outlined"
+            size="small"
+            fullWidth
+            onClick={() => {
+              if (!createRigidForms && !createLinkForms) {
+                showStatus?.('Turn on "Create rigid forms" and/or "Create link forms"', 'warning', 3000)
+                return
+              }
+              void onCreateMissingForms()
+            }}
+            onKeyDown={(e) => { if (e.key === ' ' || e.code === 'Space') e.preventDefault() }}
+            sx={{ textTransform: 'none', fontSize: '0.75rem', mb: 1 }}
+          >
+            Create missing forms
+          </Button>
+        </Tooltip>
+      )}
 
       <Tooltip
         title="Assign z-levels to links and forms by overlap; colors by layer"
